@@ -1,6 +1,6 @@
 // API utility functions for ChainSleuth backend
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5001";
+const API_BASE = process.env.API_BASE_URL;
 
 // Helper function to handle API errors
 const handleApiError = (response, data) => {

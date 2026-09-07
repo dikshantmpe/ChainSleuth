@@ -31,7 +31,7 @@ CORS(app, resources={r"/api/*": {
         "http://localhost:5001",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
-        "https://chainsleuth.vercel.app",  # Replace with your actual Vercel production URL
+        "https://chain-sleuth-nu.vercel.app",  # Replace with your actual Vercel production URL
         "https://*.vercel.app"             # Wildcard to allow Vercel preview deployments
     ],
     "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
