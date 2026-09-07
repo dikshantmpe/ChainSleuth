@@ -2,12 +2,13 @@ import React, { useState, useEffect } from "react";
 import { Briefcase, ArrowRight, Clock, Users } from "lucide-react";
 import { riskColor } from "../utils/risk.js";
 
-const API_BASE_URL = "http://localhost:5001";
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
 
 export default function CasesView({ onOpen, toast }) {
   const [cases, setCases] = useState([]);
   const [loading, setLoading] = useState(true);
-  
+
   // Form State
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState("");
@@ -47,15 +48,15 @@ export default function CasesView({ onOpen, toast }) {
         body: JSON.stringify({
           title: title.trim(),
           investigator: officer.trim(),
-          risk: risk 
+          risk: risk,
         }),
       });
 
       if (res.ok) {
         toast && toast("Investigation saved to Neo4j database.");
-        setTitle(""); 
-        setOfficer(""); 
-        setRisk("medium"); 
+        setTitle("");
+        setOfficer("");
+        setRisk("medium");
         setShowForm(false);
         fetchCases(); // Instantly refresh the UI with new database records
       } else {
@@ -68,7 +69,9 @@ export default function CasesView({ onOpen, toast }) {
 
   // Pre-fill officer name when opening the form
   const openForm = () => {
-    const storedUser = JSON.parse(localStorage.getItem("chainsleuth_user") || "{}");
+    const storedUser = JSON.parse(
+      localStorage.getItem("chainsleuth_user") || "{}",
+    );
     setOfficer(storedUser.name || "");
     setShowForm(true);
   };
@@ -96,16 +99,27 @@ export default function CasesView({ onOpen, toast }) {
         @media(max-width:900px){ .cv-grid{grid-template-columns:1fr} }
       `}</style>
 
-      <button className="cx-btn cx-btn-primary" style={{ marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }} onClick={openForm}>
+      <button
+        className="cx-btn cx-btn-primary"
+        style={{
+          marginBottom: 14,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+        onClick={openForm}
+      >
         + New Case
       </button>
 
       <div className="cv-grid">
         <div className="cv-new" onClick={openForm}>
           <Briefcase size={20} />
-          <span style={{ fontSize: 12.5, fontWeight: 700 }}>Create New Case</span>
+          <span style={{ fontSize: 12.5, fontWeight: 700 }}>
+            Create New Case
+          </span>
         </div>
-        
+
         {loading ? (
           <div className="cv-loading">Loading live investigations...</div>
         ) : (
@@ -113,16 +127,28 @@ export default function CasesView({ onOpen, toast }) {
             <div className="cv-card" key={c.id} onClick={() => onOpen(c)}>
               <div className="top">
                 <span className="cv-id">{c.id}</span>
-                <span className="cx-badge" style={{ background: `${riskColor(c.risk || "medium")}22`, color: riskColor(c.risk || "medium") }}>
+                <span
+                  className="cx-badge"
+                  style={{
+                    background: `${riskColor(c.risk || "medium")}22`,
+                    color: riskColor(c.risk || "medium"),
+                  }}
+                >
                   {c.status}
                 </span>
               </div>
               <div className="cv-title">{c.title}</div>
               {/* Note: Mapped to backend keys 'investigator' and 'date_opened' */}
-              <div className="cv-meta"><Users size={12} /> {c.investigator}</div>
-              <div className="cv-meta"><Clock size={12} /> Opened {c.date_opened}</div>
+              <div className="cv-meta">
+                <Users size={12} /> {c.investigator}
+              </div>
+              <div className="cv-meta">
+                <Clock size={12} /> Opened {c.date_opened}
+              </div>
               <div className="cv-foot">
-                <span style={{ fontSize: 11, color: "var(--dim)" }}>{c.wallets || 0} wallets</span>
+                <span style={{ fontSize: 11, color: "var(--dim)" }}>
+                  {c.wallets || 0} wallets
+                </span>
                 <ArrowRight size={13} color="var(--dim)" />
               </div>
             </div>
@@ -133,16 +159,38 @@ export default function CasesView({ onOpen, toast }) {
       {showForm && (
         <div className="cv-modal-bg" onClick={() => setShowForm(false)}>
           <div className="cv-modal" onClick={(e) => e.stopPropagation()}>
-            <div style={{ fontSize: 10, color: "var(--lime)", fontWeight: 800, letterSpacing: ".1em", marginBottom: 4 }}>NEW CASE</div>
-            <h3 style={{ fontSize: 17, margin: "2px 0 18px" }}>Open an investigation</h3>
+            <div
+              style={{
+                fontSize: 10,
+                color: "var(--lime)",
+                fontWeight: 800,
+                letterSpacing: ".1em",
+                marginBottom: 4,
+              }}
+            >
+              NEW CASE
+            </div>
+            <h3 style={{ fontSize: 17, margin: "2px 0 18px" }}>
+              Open an investigation
+            </h3>
             <form onSubmit={submit}>
               <div className="cv-field">
                 <label>CASE TITLE</label>
-                <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Cross-Border Layering Probe #19" required />
+                <input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="e.g. Cross-Border Layering Probe #19"
+                  required
+                />
               </div>
               <div className="cv-field">
                 <label>ASSIGNED OFFICER</label>
-                <input value={officer} onChange={(e) => setOfficer(e.target.value)} placeholder="e.g. Insp. R. Sharma" required />
+                <input
+                  value={officer}
+                  onChange={(e) => setOfficer(e.target.value)}
+                  placeholder="e.g. Insp. R. Sharma"
+                  required
+                />
               </div>
               <div className="cv-field">
                 <label>INITIAL RISK LEVEL</label>
@@ -153,8 +201,21 @@ export default function CasesView({ onOpen, toast }) {
                 </select>
               </div>
               <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
-                <button type="button" className="cx-btn cx-btn-secondary" style={{ flex: 1 }} onClick={() => setShowForm(false)}>Cancel</button>
-                <button type="submit" className="cx-btn cx-btn-primary" style={{ flex: 1 }}>Create Case</button>
+                <button
+                  type="button"
+                  className="cx-btn cx-btn-secondary"
+                  style={{ flex: 1 }}
+                  onClick={() => setShowForm(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="cx-btn cx-btn-primary"
+                  style={{ flex: 1 }}
+                >
+                  Create Case
+                </button>
               </div>
             </form>
           </div>

@@ -1,6 +1,7 @@
 // API utility functions for ChainSleuth backend
 
-const API_BASE = process.env.API_BASE_URL;
+// Fixed: Vite uses import.meta.env for environment variables
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
 
 // Helper function to handle API errors
 const handleApiError = (response, data) => {

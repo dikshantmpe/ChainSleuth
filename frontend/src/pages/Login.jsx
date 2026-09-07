@@ -1,6 +1,9 @@
 import React, { useState } from "react";
 import { Search, ChevronLeft, ShieldAlert, Lock, Mail } from "lucide-react";
 
+// Dynamic API URL: Uses Vercel env var in production, falls back to localhost for development
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
+
 export default function Login({ onLogin, onBack, switchToRegister }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -14,7 +17,7 @@ export default function Login({ onLogin, onBack, switchToRegister }) {
     setError("");
 
     try {
-      const response = await fetch("http://localhost:5001/api/login", {
+      const response = await fetch(`${API_BASE_URL}/api/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),

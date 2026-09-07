@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Search, ChevronLeft, ChevronRight, Copy } from "lucide-react";
 
-const API_BASE_URL = "http://localhost:5001";
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
 
 export default function TransactionsView() {
   const [transactions, setTransactions] = useState([]);
@@ -56,7 +57,8 @@ export default function TransactionsView() {
     setTimeout(() => setCopied(""), 2000);
   };
 
-  const shortAddr = (addr) => addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : "N/A";
+  const shortAddr = (addr) =>
+    addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : "N/A";
 
   const totalPages = Math.ceil(total / pageSize);
 
@@ -118,16 +120,16 @@ export default function TransactionsView() {
               </div>
               {transactions.map((tx, i) => (
                 <div className="tx-row" key={i}>
-                  <div 
-                    className="tx-addr" 
+                  <div
+                    className="tx-addr"
                     onClick={() => copyToClipboard(tx.from)}
                     title={tx.from}
                   >
                     {shortAddr(tx.from)}
                     <Copy size={12} />
                   </div>
-                  <div 
-                    className="tx-addr" 
+                  <div
+                    className="tx-addr"
                     onClick={() => copyToClipboard(tx.to)}
                     title={tx.to}
                   >
@@ -136,7 +138,11 @@ export default function TransactionsView() {
                   </div>
                   <div className="tx-amount">{tx.amount.toFixed(4)}</div>
                   <div>{tx.count}</div>
-                  <div>{tx.timestamp ? new Date(tx.timestamp * 1000).toLocaleDateString() : "N/A"}</div>
+                  <div>
+                    {tx.timestamp
+                      ? new Date(tx.timestamp * 1000).toLocaleDateString()
+                      : "N/A"}
+                  </div>
                 </div>
               ))}
             </>
@@ -153,7 +159,10 @@ export default function TransactionsView() {
               <button disabled={page === 0} onClick={() => setPage(page - 1)}>
                 <ChevronLeft size={14} /> Prev
               </button>
-              <button disabled={page >= totalPages - 1} onClick={() => setPage(page + 1)}>
+              <button
+                disabled={page >= totalPages - 1}
+                onClick={() => setPage(page + 1)}
+              >
                 Next <ChevronRight size={14} />
               </button>
             </div>
