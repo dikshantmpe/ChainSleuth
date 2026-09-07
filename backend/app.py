@@ -22,13 +22,17 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 app = Flask(__name__)
+
+# Updated CORS to allow Vercel frontend URLs
 CORS(app, resources={r"/api/*": {
     "origins": [
         "http://localhost:5173",
         "http://localhost:3000", 
         "http://localhost:5001",
         "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000"
+        "http://127.0.0.1:3000",
+        "https://chainsleuth.vercel.app",  # Replace with your actual Vercel production URL
+        "https://*.vercel.app"             # Wildcard to allow Vercel preview deployments
     ],
     "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     "allow_headers": ["Content-Type", "Authorization"]
