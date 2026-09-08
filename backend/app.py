@@ -84,22 +84,24 @@ def fetch_ethereum_transactions(wallet_address):
         logger.error("❌ ETHERSCAN_API_KEY is missing in Render Environment Variables!")
         return []
     
+    # Clean the address just in case the frontend sends spaces
+    wallet_address = wallet_address.strip()
+    logger.info(f"Attempting to fetch transactions for EXACT address: '{wallet_address}'")
+    
     try:
-        # UPDATED: Using Etherscan API V2 endpoint with chainid=1 for Ethereum Mainnet
+        # Using Etherscan API V2 endpoint with chainid=1 for Ethereum Mainnet
         url = f"https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address={wallet_address}&startblock=0&endblock=99999999&sort=asc&apikey={ETHERSCAN_API_KEY}"
         response = requests.get(url, timeout=15)
         data = response.json()
         
-        # Log the exact response from Etherscan for debugging
-        logger.info(f"Etherscan V2 Status: {data.get('status')}, Message: {data.get('message')}")
+        logger.info(f"Etherscan V2 Response - Status: {data.get('status')}, Message: {data.get('message')}")
         
         if data.get('status') == '1' and isinstance(data.get('result'), list):
             logger.info(f"✅ Fetched {len(data['result'])} transactions from Etherscan V2")
             return data['result']
         else:
-            # Handle the "No transactions found" string response cleanly
             if data.get('result') == "No transactions found":
-                logger.info(f"No transactions found for {wallet_address}.")
+                logger.warning(f"⚠️ Etherscan says 'No transactions found' for {wallet_address}. Check if the address is complete (42 chars).")
             else:
                 logger.error(f"❌ Etherscan API V2 Error: {data.get('message')} | Details: {data.get('result')}")
             return []
@@ -107,7 +109,7 @@ def fetch_ethereum_transactions(wallet_address):
     except Exception as e:
         logger.error(f"❌ Etherscan V2 request failed: {e}")
         return []
-
+        
 def extract_features_from_transactions(transactions):
     """Extract features from transactions for fraud detection"""
     if not transactions or len(transactions) == 0:
