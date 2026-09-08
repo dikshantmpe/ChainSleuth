@@ -5,7 +5,7 @@ import AddrChip from "../components/AddrChip.jsx";
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
 
-export default function WalletsView({ caseId }) {
+export default function WalletsView({ caseId, toast }) {
   const [wallets, setWallets] = useState([]);
   const [selected, setSelected] = useState(null);
   const [query, setQuery] = useState("");
@@ -17,18 +17,26 @@ export default function WalletsView({ caseId }) {
     const fetchWallets = async () => {
       try {
         setLoading(true);
+        const token = localStorage.getItem("chainsleuth_token");
         const endpoint = caseId
           ? `/api/cases/${caseId}/wallets`
           : `/api/wallets`;
-        const res = await fetch(`${API_BASE_URL}${endpoint}`);
+          
+        const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        
         if (res.ok) {
           const data = await res.json();
           const list = data.wallets || [];
           setWallets(list);
           if (list.length > 0 && !selected) setSelected(list[0]);
+        } else if (res.status === 401) {
+          toast && toast("Authentication expired. Please log in again.");
         }
       } catch (err) {
         console.error("Failed to fetch wallets:", err);
+        toast && toast("Failed to fetch wallets from database.");
       } finally {
         setLoading(false);
       }
@@ -50,10 +58,14 @@ export default function WalletsView({ caseId }) {
     }
 
     try {
+      const token = localStorage.getItem("chainsleuth_token");
       const endpoint = caseId ? `/api/cases/${caseId}/wallets` : `/api/wallets`;
       const res = await fetch(`${API_BASE_URL}${endpoint}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
         body: JSON.stringify({ address: addr }),
       });
 
@@ -63,15 +75,14 @@ export default function WalletsView({ caseId }) {
         if (fresh) {
           setWallets((prev) => [fresh, ...prev]);
           setSelected(fresh);
+          toast && toast(`Wallet ${addr.slice(0,6)}... tracked successfully.`);
         }
       } else {
         const errData = await res.json().catch(() => ({}));
-        alert(
-          `Backend Error: ${res.status}\n${errData.error || "Failed to add wallet."}`,
-        );
+        toast && toast(`Backend Error: ${errData.error || "Failed to add wallet."}`);
       }
     } catch (err) {
-      alert(`Network Error: ${err.message}\nIs the backend running?`);
+      toast && toast(`Network Error: ${err.message}`);
     }
   };
 
@@ -81,9 +92,14 @@ export default function WalletsView({ caseId }) {
     setIsAnalyzing(true);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/wallet/fraud-score`, {
+      const token = localStorage.getItem("chainsleuth_token");
+      // Updated to match the live backend route /api/wallets/analyze
+      const res = await fetch(`${API_BASE_URL}/api/wallets/analyze`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
         body: JSON.stringify({
           address: selected.addr,
           blockchain: selected.chain || "ethereum",
@@ -107,12 +123,13 @@ export default function WalletsView({ caseId }) {
         setWallets((prev) =>
           prev.map((w) => (w.addr === updatedWallet.addr ? updatedWallet : w)),
         );
+        toast && toast("Deep analysis complete. ML pipeline updated.");
       } else {
         const errData = await res.json().catch(() => ({}));
-        alert(`Analysis Failed: ${errData.error || "Server error"}`);
+        toast && toast(`Analysis Failed: ${errData.error || "Server error"}`);
       }
     } catch (err) {
-      alert(`Network Error: ${err.message}\nCheck your backend terminal.`);
+      toast && toast(`Network Error: ${err.message}`);
     } finally {
       setIsAnalyzing(false);
     }
@@ -242,7 +259,7 @@ export default function WalletsView({ caseId }) {
       </div>
 
       <div
-        className="dv-panel"
+        className="dv-panel cx-scroll"
         style={{
           background: "var(--card)",
           border: "1px solid var(--line)",
@@ -251,7 +268,6 @@ export default function WalletsView({ caseId }) {
           maxHeight: "calc(100vh - 120px)",
           overflowY: "auto",
         }}
-        className="cx-scroll"
       >
         <div
           style={{
