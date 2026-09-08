@@ -5,21 +5,44 @@ export default function Topbar({ view, setView, onLogout, role, user }) {
   const [profileOpen, setProfileOpen] = useState(false);
   const profileRef = useRef(null);
 
-  // Get data from props (passed down from App.jsx -> Dashboard.jsx)
-  const isAdmin = role === "admin";
-  const name = user?.name || (isAdmin ? "Admin Sharma" : "Investigator Singh");
+  // Fallback to localStorage if user prop is missing or incomplete
+  const storedUser = !user || !user.email 
+    ? JSON.parse(localStorage.getItem("chainsleuth_user") || '{}') 
+    : user;
+  
+  const currentRole = role || storedUser?.role || 'investigator';
+  const isAdmin = currentRole === 'admin';
+  
+  const email = storedUser?.email || "unknown@cybercell.gov.in";
+  
+  // Extract name from email if 'name' field doesn't exist (e.g. "investigator.singh@..." -> "Investigator Singh")
+  let name = storedUser?.name;
+  if (!name && email !== "unknown@cybercell.gov.in") {
+    const emailPrefix = email.split('@')[0];
+    // Replace dots/underscores with spaces, remove numbers, and capitalize
+    name = emailPrefix
+      .replace(/[0-9_]/g, ' ')
+      .replace(/\./g, ' ')
+      .replace(/\b\w/g, c => c.toUpperCase())
+      .trim();
+    
+    if (!name) name = isAdmin ? "Admin" : "Investigator";
+  } else if (!name) {
+    name = isAdmin ? "Admin Sharma" : "Investigator Singh";
+  }
+
   const unit = isAdmin ? "System Administration" : "Chandigarh Cyber Cell";
-  const email = user?.email || "unknown@cybercell.gov.in";
   
   // Calculate initials from name
   const calcInitials = (fullName) => {
     if (!fullName) return isAdmin ? "AS" : "IS";
-    const parts = fullName.split(" ");
+    const parts = fullName.trim().split(/\s+/);
     if (parts.length > 1) {
       return (parts[0][0] + parts[1][0]).toUpperCase();
     }
     return fullName.substring(0, 2).toUpperCase();
   };
+  
   const initials = calcInitials(name);
 
   useEffect(() => {
@@ -32,7 +55,6 @@ export default function Topbar({ view, setView, onLogout, role, user }) {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Removed "Settings" from main nav items
   const navItems = [
     { id: "dashboard", label: "Dashboard", svg: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg> },
     { id: "cases", label: "Cases", svg: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 7h16v13H4z"/><path d="M8 7V5h8v2M9 11v5M15 11v5"/></svg> },
@@ -290,6 +312,7 @@ export default function Topbar({ view, setView, onLogout, role, user }) {
           font-size: 11px;
           color: #e8eeeb;
           font-weight: 600;
+          white-space: nowrap;
         }
 
         .profile-unit {
