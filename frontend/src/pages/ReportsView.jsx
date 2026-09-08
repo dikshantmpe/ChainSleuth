@@ -14,7 +14,10 @@ export default function ReportsView({ toast }) {
     const fetchCasesForReports = async () => {
       try {
         setLoading(true);
-        const res = await fetch(`${API_BASE_URL}/api/cases`);
+        const token = localStorage.getItem("chainsleuth_token");
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+        const res = await fetch(`${API_BASE_URL}/api/cases`, { headers });
         const data = await res.json();
 
         if (res.ok) {
@@ -22,12 +25,18 @@ export default function ReportsView({ toast }) {
             id: `REP-${c.id}`,
             title: `Forensic Summary: ${c.title}`,
             case: c.id,
-            generated: new Date(c.date_opened).toLocaleDateString(),
-            investigator: c.investigator,
+            generated: c.date_opened 
+              ? new Date(c.date_opened).toLocaleDateString() 
+              : new Date().toLocaleDateString(),
+            investigator: c.investigator || "Unknown",
           }));
           setReports(liveReports);
         } else {
-          setError("Failed to load case data.");
+          if (res.status === 401) {
+            setError("Authentication expired. Please log in again.");
+          } else {
+            setError("Failed to load case data.");
+          }
         }
       } catch (err) {
         setError("Connection error - backend not available.");
@@ -43,8 +52,12 @@ export default function ReportsView({ toast }) {
   const handleDownload = async (report) => {
     setDownloadingId(report.id);
     try {
+      const token = localStorage.getItem("chainsleuth_token");
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
       const res = await fetch(
         `${API_BASE_URL}/api/cases/${report.case}/export-data`,
+        { headers }
       );
       const data = await res.json();
 
@@ -52,7 +65,7 @@ export default function ReportsView({ toast }) {
         throw new Error(data.error || "Failed to fetch export data");
       }
 
-      const c = data.case;
+      const c = data.case || {};
       const wallets = data.wallets || [];
 
       let content = `
@@ -60,15 +73,15 @@ export default function ReportsView({ toast }) {
            CHAINSLEUTH FORENSIC REPORT
 ======================================================
 
-CASE ID:        ${c.id}
-TITLE:          ${c.title}
-PREPARED BY:    ${c.investigator}
-DATE OPENED:    ${c.date_opened}
+CASE ID:        ${c.id || "N/A"}
+TITLE:          ${c.title || "N/A"}
+PREPARED BY:    ${c.investigator || "N/A"}
+DATE OPENED:    ${c.date_opened || "N/A"}
 
 ------------------------------------------------------
 INVESTIGATION SUMMARY:
 This document serves as the official forensic export 
-for case ${c.id}. A total of ${wallets.length} wallets 
+for case ${c.id || "N/A"}. A total of ${wallets.length} wallets 
 were tracked and analyzed using the ChainSleuth ML engine.
 
 ------------------------------------------------------
@@ -79,15 +92,19 @@ SUBJECT WALLETS & AI RISK ASSESSMENT:
         content += "\n\nNo wallets currently tracked in this case.\n";
       } else {
         wallets.forEach((w, i) => {
+          // Safely format volume to prevent crashes if null
+          const vol = Number(w.total_volume || 0).toFixed(4);
+          
           content += `\n[${i + 1}] WALLET: ${w.address}\n`;
-          content += `    Risk Score: ${w.score}/100 (${w.level.toUpperCase()})\n`;
-          content += `    Transactions Recorded: ${w.tx_count}\n`;
-          content += `    Total Volume Moved: ${w.total_volume.toFixed(4)} ETH\n`;
+          content += `    Risk Score: ${w.score || 0}/100 (${(w.level || "low").toUpperCase()})\n`;
+          content += `    Transactions Recorded: ${w.tx_count || 0}\n`;
+          content += `    Total Volume Moved: ${vol} ETH\n`;
 
           if (w.patterns && w.patterns.length > 0) {
             content += `    ML Detected Patterns:\n`;
             w.patterns.forEach((p) => {
-              content += `      - ${p.name} (Risk: ${p.risk}, Confidence: ${(p.confidence * 100).toFixed(0)}%)\n`;
+              const conf = ((p.confidence || 0) * 100).toFixed(0);
+              content += `      - ${p.name || "Pattern"} (Risk: ${p.risk || "N/A"}, Confidence: ${conf}%)\n`;
             });
           } else {
             content += `    ML Detected Patterns: None (Unanalyzed)\n`;
@@ -114,6 +131,7 @@ SUBJECT WALLETS & AI RISK ASSESSMENT:
 
       if (toast) toast(`Court report exported: ${report.id}_Court_Export.txt`);
     } catch (err) {
+      console.error("Export error:", err);
       if (toast) toast(`Error: ${err.message}`);
     } finally {
       setDownloadingId(null);
