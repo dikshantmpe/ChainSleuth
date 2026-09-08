@@ -81,22 +81,28 @@ def fetch_ethereum_transactions(wallet_address):
     ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY', '')
     
     if not ETHERSCAN_API_KEY:
-        logger.warning("⚠️  No ETHERSCAN_API_KEY found, using mock data")
+        logger.error("❌ ETHERSCAN_API_KEY is missing in Render Environment Variables!")
         return []
     
     try:
-        url = f"https://api.etherscan.io/api?module=account&action=txlist&address={wallet_address}&startblock=0&endblock=99999999&apikey={ETHERSCAN_API_KEY}"
+        # Added sort=asc to ensure we get oldest transactions first
+        url = f"https://api.etherscan.io/api?module=account&action=txlist&address={wallet_address}&startblock=0&endblock=99999999&sort=asc&apikey={ETHERSCAN_API_KEY}"
         response = requests.get(url, timeout=15)
         data = response.json()
         
-        if data.get('status') == '1' and len(data.get('result', [])) > 0:
+        # Log the exact response from Etherscan for debugging
+        logger.info(f"Etherscan Status: {data.get('status')}, Message: {data.get('message')}")
+        
+        # Ensure result is a list (Etherscan returns a string error message if it fails)
+        if data.get('status') == '1' and isinstance(data.get('result'), list):
             logger.info(f"✅ Fetched {len(data['result'])} transactions from Etherscan")
             return data['result']
         else:
-            logger.info(f"⚠️  No transactions found for {wallet_address}")
+            logger.error(f"❌ Etherscan API Error: {data.get('result')}")
             return []
+            
     except Exception as e:
-        logger.error(f"❌ Etherscan API error: {e}")
+        logger.error(f"❌ Etherscan request failed: {e}")
         return []
 
 def extract_features_from_transactions(transactions):
