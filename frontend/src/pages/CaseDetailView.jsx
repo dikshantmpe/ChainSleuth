@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { ChevronLeft, Plus, ShieldAlert } from "lucide-react";
+import { ChevronLeft, ShieldAlert, PlusCircle } from "lucide-react";
 import { riskColor } from "../utils/risk.js";
 import WalletsView from "./WalletsView.jsx";
 import TransactionsView from "./TransactionsView.jsx";
@@ -9,7 +9,7 @@ import AIView from "./AIView.jsx";
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
 
-export default function CaseDetailView({ caseItem, onBack }) {
+export default function CaseDetailView({ caseItem, onBack, toast }) {
   const [tab, setTab] = useState("overview");
   const [patterns, setPatterns] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -17,6 +17,7 @@ export default function CaseDetailView({ caseItem, onBack }) {
   // Wallet linking state
   const [newWallet, setNewWallet] = useState("");
   const [isLinking, setIsLinking] = useState(false);
+  const [walletCount, setWalletCount] = useState(caseItem.wallets || 0);
 
   const TABS = [
     { id: "overview", label: "Overview" },
@@ -31,14 +32,20 @@ export default function CaseDetailView({ caseItem, onBack }) {
     const fetchCasePatterns = async () => {
       try {
         setLoading(true);
+        const token = localStorage.getItem("chainsleuth_token");
+        
         const res = await fetch(
           `${API_BASE_URL}/api/cases/${caseItem.id}/patterns`,
+          {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          }
         );
+
         if (res.ok) {
           const data = await res.json();
           setPatterns(data.patterns || []);
         } else {
-          // Fallback if backend route isn't built yet
+          // Fallback if backend route fails
           setPatterns([
             {
               badge: "DETECTED",
@@ -66,29 +73,48 @@ export default function CaseDetailView({ caseItem, onBack }) {
     fetchCasePatterns();
   }, [caseItem.id]);
 
-  const handleLinkWallet = (e) => {
+  const handleLinkWallet = async (e) => {
     e.preventDefault();
     if (!newWallet.trim()) return;
     setIsLinking(true);
 
-    // Simulate linking wallet to case in Neo4j
-    setTimeout(() => {
-      setNewWallet("");
+    try {
+      const token = localStorage.getItem("chainsleuth_token");
+      const res = await fetch(`${API_BASE_URL}/api/cases/${caseItem.id}/wallets`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
+        body: JSON.stringify({ address: newWallet.trim() }),
+      });
+
+      if (res.ok) {
+        toast && toast(`Wallet ${newWallet.slice(0, 6)}... tracked to case.`);
+        setWalletCount((prev) => prev + 1); // Update UI instantly
+        setNewWallet("");
+      } else {
+        toast && toast("Failed to link wallet to case.");
+      }
+    } catch (err) {
+      console.error("Error linking wallet:", err);
+      toast && toast("Network error linking wallet.");
+    } finally {
       setIsLinking(false);
-      caseItem.wallets = (caseItem.wallets || 0) + 1; // Optimistic UI update
-    }, 800);
+    }
   };
 
   return (
     <div className="cx-fade-up" style={{ padding: 24 }}>
       <style>{`
-        .cd-tabs{ display:flex; gap:6px; margin:18px 0 6px; border-bottom:1px solid var(--line); }
-        .cd-tab{ background:none; border:0; padding:10px 14px; font-size:12.5px; color:var(--dim); cursor:pointer; border-bottom:2px solid transparent; }
+        .cd-tabs{ display:flex; gap:6px; margin:18px 0 6px; border-bottom:1px solid var(--line); overflow-x: auto; }
+        .cd-tab{ background:none; border:0; padding:10px 14px; font-size:12.5px; color:var(--dim); cursor:pointer; border-bottom:2px solid transparent; white-space: nowrap; }
         .cd-tab.active{ color:var(--lime); border-color:var(--lime); font-weight:700; }
         .cd-loading{ padding: 20px 0; color: var(--dim); font-size: 13px; }
-        .cd-wallet-form { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 20px; display: flex; gap: 12px; align-items: center; }
-        .cd-wallet-input { flex: 1; background: #080b0d; border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; color: #fff; font-size: 13px; font-family: monospace; outline: none; }
+        .cd-wallet-form { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 20px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        .cd-wallet-input { flex: 1; min-width: 250px; background: #080b0d; border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; color: #fff; font-size: 13px; font-family: monospace; outline: none; }
         .cd-wallet-input:focus { border-color: rgba(182,255,0,.5); }
+        .cd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
       `}</style>
 
       <button
@@ -114,6 +140,8 @@ export default function CaseDetailView({ caseItem, onBack }) {
           display: "flex",
           justifyContent: "space-between",
           alignItems: "flex-start",
+          gap: "16px",
+          flexWrap: "wrap",
         }}
       >
         <div>
@@ -131,9 +159,7 @@ export default function CaseDetailView({ caseItem, onBack }) {
           </h2>
           <div style={{ fontSize: 12, color: "var(--muted)" }}>
             {caseItem.investigator} · Opened {caseItem.date_opened} ·{" "}
-            <strong style={{ color: "var(--lime)" }}>
-              {caseItem.wallets || 0}
-            </strong>{" "}
+            <strong style={{ color: "var(--lime)" }}>{walletCount}</strong>{" "}
             wallets tracked
           </div>
         </div>
@@ -146,7 +172,7 @@ export default function CaseDetailView({ caseItem, onBack }) {
             padding: "6px 12px",
           }}
         >
-          {caseItem.status}
+          {caseItem.status || "Open"}
         </span>
       </div>
 
@@ -182,8 +208,9 @@ export default function CaseDetailView({ caseItem, onBack }) {
                   type="submit"
                   className="cx-btn cx-btn-primary"
                   disabled={isLinking || !newWallet.trim()}
-                  style={{ padding: "10px 16px" }}
+                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 16px" }}
                 >
+                  <PlusCircle size={14} />
                   {isLinking ? "Tracking..." : "Track Wallet"}
                 </button>
               </form>
@@ -197,13 +224,7 @@ export default function CaseDetailView({ caseItem, onBack }) {
               >
                 Automated AI Insights
               </h3>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(3,1fr)",
-                  gap: 12,
-                }}
-              >
+              <div className="cd-grid">
                 {patterns.map((p, i) => (
                   <div
                     key={i}
