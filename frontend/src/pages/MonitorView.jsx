@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
@@ -6,6 +6,7 @@ const API_BASE_URL =
 export default function MonitorView({ toast }) {
   const [feed, setFeed] = useState([]);
   const [isPolling, setIsPolling] = useState(true);
+  const feedEndRef = useRef(null);
 
   useEffect(() => {
     const fetchLiveAlerts = async () => {
@@ -38,17 +39,17 @@ export default function MonitorView({ toast }) {
               "System detected anomalous routing matching algorithmic risk profiles.",
           }));
 
-          // Prepend new alerts and keep the list to a maximum of 25 recent events
+          // Prepend new alerts and keep the list to a maximum of 50 recent events
           setFeed((prevFeed) => {
             const combined = [...freshAlerts, ...prevFeed];
-            // Deduplicate by title+wallet to prevent spamming the exact same alert every 8 seconds
+            // Deduplicate by title+wallet to prevent spamming the exact same alert every 5 seconds
             const unique = combined.filter(
               (v, i, a) =>
                 a.findIndex(
                   (t) => t.title === v.title && t.wallet === v.wallet,
                 ) === i,
             );
-            return unique.slice(0, 25);
+            return unique.slice(0, 50);
           });
         }
       } catch (err) {
@@ -59,16 +60,37 @@ export default function MonitorView({ toast }) {
     // Initial fetch
     fetchLiveAlerts();
 
-    // Set up background polling every 8 seconds
+    // Set up background polling every 5 seconds for faster real-time feel
     const interval = setInterval(() => {
       if (isPolling) fetchLiveAlerts();
-    }, 8000);
+    }, 5000);
 
     return () => clearInterval(interval);
   }, [isPolling, toast]);
 
+  // Auto-scroll to top when a new alert comes in (since we prepend)
+  // Or keep it simple, the scroll container handles it.
+
   return (
-    <div className="cx-fade" style={{ padding: 24 }}>
+    <div className="cx-fade" style={{ padding: 24, height: "100%", display: "flex", flexDirection: "column" }}>
+      <style>{`
+        @keyframes pulse {
+          0% { box-shadow: 0 0 0 0 rgba(182,255,0, 0.7); }
+          70% { box-shadow: 0 0 0 6px rgba(182,255,0, 0); }
+          100% { box-shadow: 0 0 0 0 rgba(182,255,0, 0); }
+        }
+        @keyframes slideIn {
+          0% { transform: translateX(20px); opacity: 0; background: rgba(182,255,0, 0.05); }
+          100% { transform: translateX(0); opacity: 1; background: transparent; }
+        }
+        .live-alert-item {
+          animation: slideIn 0.5s ease-out forwards;
+        }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+      `}</style>
+
       <div
         style={{
           display: "flex",
@@ -81,36 +103,37 @@ export default function MonitorView({ toast }) {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 8,
-            fontSize: 12.5,
-            color: "var(--lime)",
+            gap: 12,
+            fontSize: 13,
+            color: isPolling ? "var(--lime)" : "var(--danger)",
+            fontWeight: 700,
           }}
         >
           <span
             style={{
-              width: 8,
-              height: 8,
+              width: 10,
+              height: 10,
               borderRadius: 99,
-              background: "var(--lime)",
-              boxShadow: "0 0 0 4px rgba(182,255,0,.15)",
-              animation: "pulse 2s infinite",
+              background: isPolling ? "var(--lime)" : "var(--danger)",
+              animation: isPolling ? "pulse 2s infinite" : "none",
             }}
           />
-          {isPolling ? "Live feed — connected to port 5001" : "Feed Paused"}
+          {isPolling ? "LIVE FEED ACTIVE" : "FEED PAUSED"}
         </div>
         <button
           onClick={() => setIsPolling(!isPolling)}
           style={{
             background: "transparent",
             border: "1px solid var(--line)",
-            color: "var(--dim)",
+            color: isPolling ? "var(--danger)" : "var(--lime)",
             fontSize: 11,
-            padding: "4px 10px",
+            padding: "6px 12px",
             borderRadius: 6,
             cursor: "pointer",
+            fontWeight: 700,
           }}
         >
-          {isPolling ? "Pause Feed" : "Resume Feed"}
+          {isPolling ? "PAUSE FEED" : "RESUME FEED"}
         </button>
       </div>
 
@@ -119,100 +142,85 @@ export default function MonitorView({ toast }) {
           background: "var(--card)",
           border: "1px solid var(--line)",
           borderRadius: 16,
-          overflow: "hidden",
+          overflowY: "auto",
+          flex: 1,
+          maxHeight: "calc(100vh - 180px)",
+          background: "radial-gradient(circle at top right, rgba(182,255,0,0.03), transparent 40%), var(--card)",
         }}
       >
         {feed.length === 0 ? (
           <div
             style={{
-              padding: 40,
+              padding: 60,
               textAlign: "center",
               color: "var(--dim)",
-              fontSize: 12,
+              fontSize: 13,
             }}
           >
-            Listening for network anomalies...
+            <div style={{ marginBottom: 8, fontSize: 24 }}>📡</div>
+            Listening for network anomalies...<br/>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>High-risk transactions will appear here in real-time.</span>
           </div>
         ) : (
-          feed.map((a) => (
+          feed.map((a, index) => (
             <div
               key={a.id}
+              className="live-alert-item"
               style={{
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                padding: "16px 20px",
+                padding: "14px 20px",
                 borderBottom: "1px solid rgba(255,255,255,.05)",
+                transition: "background 0.2s",
               }}
             >
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span
-                    className="cx-badge"
-                    style={{
-                      background:
-                        a.sev === "high"
-                          ? "rgba(255,92,103,.12)"
-                          : a.sev === "medium"
-                            ? "rgba(255,189,74,.12)"
-                            : "rgba(113,128,135,.15)",
-                      color:
-                        a.sev === "high"
-                          ? "var(--danger)"
-                          : a.sev === "medium"
-                            ? "var(--warning)"
-                            : "var(--dim)",
-                    }}
-                  >
-                    {a.sev.toUpperCase()}
-                  </span>
-                  <span
-                    style={{ fontWeight: 700, fontSize: 13, color: "#fff" }}
-                  >
-                    {a.title}
-                  </span>
-                </div>
-                <div
+              <div style={{ display: "flex", alignItems: "center", gap: 16, flex: 1 }}>
+                <span
                   style={{
-                    fontSize: 11.5,
-                    color: "var(--muted)",
-                    marginTop: 6,
+                    fontSize: 10,
+                    fontWeight: 800,
+                    padding: "4px 8px",
+                    borderRadius: 4,
+                    background:
+                      a.sev === "high"
+                        ? "rgba(255,92,103,.15)"
+                        : a.sev === "medium"
+                          ? "rgba(255,189,74,.15)"
+                          : "rgba(113,128,135,.15)",
+                    color:
+                      a.sev === "high"
+                        ? "var(--danger)"
+                        : a.sev === "medium"
+                          ? "var(--warning)"
+                          : "var(--dim)",
+                    minWidth: 60,
+                    textAlign: "center",
                   }}
                 >
-                  {a.desc}
-                </div>
-                <div
-                  style={{
-                    fontFamily: "monospace",
-                    fontSize: 10.5,
-                    color: "var(--dim)",
-                    marginTop: 6,
-                  }}
-                >
-                  {a.wallet}
+                  {a.sev.toUpperCase()}
+                </span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontWeight: 700, fontSize: 13, color: "#fff" }}>
+                      {a.title}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>
+                    {a.desc}
+                  </div>
+                  <div style={{ fontFamily: "monospace", fontSize: 10.5, color: "var(--dim)", marginTop: 6 }}>
+                    {a.wallet}
+                  </div>
                 </div>
               </div>
-              <span
-                style={{
-                  fontSize: 10.5,
-                  color: "var(--dim)",
-                  whiteSpace: "nowrap",
-                }}
-              >
+              <span style={{ fontSize: 10.5, color: "var(--dim)", whiteSpace: "nowrap", marginLeft: 16 }}>
                 {a.time}
               </span>
             </div>
           ))
         )}
       </div>
-
-      <style>{`
-        @keyframes pulse {
-          0% { opacity: 1; transform: scale(1); }
-          50% { opacity: 0.5; transform: scale(0.8); }
-          100% { opacity: 1; transform: scale(1); }
-        }
-      `}</style>
     </div>
   );
 }
