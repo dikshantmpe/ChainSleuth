@@ -59,53 +59,55 @@ export default function AIView({ caseId, toast }) {
       };
       if (token) headers.Authorization = `Bearer ${token}`;
 
-      // Reverted back to the original GET endpoint your backend expects
-      const res = await fetch(
-        `${API_BASE_URL}/api/wallet/fraud-score?address=${address.trim()}`,
-        { headers }
-      );
+      // Using the correct POST endpoint that matches WalletsView.jsx
+      const res = await fetch(`${API_BASE_URL}/api/wallets/analyze`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ address: address.trim() }),
+      });
+
+      // Check if the response is valid before parsing JSON
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || `Server responded with status ${res.status}`);
+      }
+
       const data = await res.json();
 
-      if (res.ok) {
-        toast && toast(`Analysis complete. Risk Score: ${data.riskScore}`);
-        
-        const generatedPatterns = [];
+      toast && toast(`Analysis complete. Risk Score: ${data.riskScore}`);
+      
+      const generatedPatterns = [];
 
-        // 1. Map ML flags to UI cards
-        (data.flags || []).forEach((flag, idx) => {
-          const flagStr = typeof flag === "string" ? flag : (flag.type || "UNKNOWN");
+      // 1. Map ML flags to UI cards
+      (data.flags || []).forEach((flag, idx) => {
+        const flagStr = typeof flag === "string" ? flag : (flag.type || "UNKNOWN");
+        generatedPatterns.push({
+          badge: (data.riskLevel || "MEDIUM").toUpperCase(),
+          title: flagStr.replace(/_/g, " "),
+          desc: data.patterns && data.patterns[idx] 
+            ? data.patterns[idx] 
+            : "Algorithmic anomaly detected by the ML pipeline. This behavior contributes to the overall risk score.",
+          contribution: `${Math.round(100 / Math.max(data.flags.length, 1))}%`
+        });
+      });
+
+      // 2. If no flags were returned, fallback to mapping the patterns array
+      if (generatedPatterns.length === 0 && data.patterns) {
+        data.patterns.forEach((p) => {
           generatedPatterns.push({
             badge: (data.riskLevel || "MEDIUM").toUpperCase(),
-            title: flagStr.replace(/_/g, " "),
-            desc: data.patterns && data.patterns[idx] 
-              ? data.patterns[idx] 
-              : "Algorithmic anomaly detected by the ML pipeline. This behavior contributes to the overall risk score.",
-            contribution: `${Math.round(100 / Math.max(data.flags.length, 1))}%`
+            title: typeof p === "string" ? p.slice(0, 40) : (p.name || "Pattern"),
+            desc: typeof p === "string" ? p : (p.description || "Detected pattern."),
+            contribution: "N/A"
           });
         });
-
-        // 2. If no flags were returned, fallback to mapping the patterns array
-        if (generatedPatterns.length === 0 && data.patterns) {
-          data.patterns.forEach((p) => {
-            generatedPatterns.push({
-              badge: (data.riskLevel || "MEDIUM").toUpperCase(),
-              title: typeof p === "string" ? p.slice(0, 40) : (p.name || "Pattern"),
-              desc: typeof p === "string" ? p : (p.description || "Detected pattern."),
-              contribution: "N/A"
-            });
-          });
-        }
-
-        setPatterns(generatedPatterns);
-      } else {
-        if (res.status === 401) {
-          toast && toast("Authentication expired. Please log in again.");
-        } else {
-          setError(data.error || "Analysis failed. Please check the wallet address.");
-        }
       }
+
+      setPatterns(generatedPatterns);
     } catch (err) {
-      setError("Failed to connect to the AI scoring engine.");
+      console.error("AI Analysis error:", err);
+      // Provide a much more specific error message
+      setError(err.message || "Failed to connect to the backend. Ensure your VITE_API_BASE_URL is set correctly and the backend is running.");
     } finally {
       setLoading(false);
     }
