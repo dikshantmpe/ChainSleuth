@@ -6,14 +6,13 @@ import React, {
   useMemo,
 } from "react";
 import * as d3 from "d3";
-import { Search } from "lucide-react"; // Added Search icon
+import { Search, Loader } from "lucide-react";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
 
-// Fraud flag color mapping (visual badges) - Expanded to match fraud_detection.py
+// Fraud flag color mapping
 const FRAUD_FLAGS = {
-  // Frontend originals
   FUND_SPLITTING: "#ff5c67",
   RAPID_PASS_THROUGH: "#ff9800",
   MIXING_PATTERN: "#ffc107",
@@ -22,18 +21,16 @@ const FRAUD_FLAGS = {
   DUST_ATTACK: "#ff6f00",
   WALLET_HOPPING: "#e91e63",
   SYBIL_ACTIVITY: "#9c27b0",
-
-  // Backend ML flags
-  OFAC_SANCTIONED: "#d32f2f", // Deep Red
-  EXTREME_VALUE_OUTLIER: "#b71c1c", // Darker Red
-  HIGH_VALUE_OUTLIER: "#f44336", // Red
-  UNUSUAL_VALUE_PATTERN: "#e91e63", // Pink
-  HIGH_RECIPIENT_DIVERSITY: "#9c27b0", // Purple
-  LOW_TX_COUNT: "#ff9800", // Orange
-  HIGH_VOLUME: "#ffc107", // Amber
-  REPEATED_TRANSACTIONS: "#ff5722", // Deep Orange
-  NORMAL_PATTERN: "#4caf50", // Green
-  ERROR_IN_SCORING: "#9e9e9e", // Grey
+  OFAC_SANCTIONED: "#d32f2f",
+  EXTREME_VALUE_OUTLIER: "#b71c1c",
+  HIGH_VALUE_OUTLIER: "#f44336",
+  UNUSUAL_VALUE_PATTERN: "#e91e63",
+  HIGH_RECIPIENT_DIVERSITY: "#9c27b0",
+  LOW_TX_COUNT: "#ff9800",
+  HIGH_VOLUME: "#ffc107",
+  REPEATED_TRANSACTIONS: "#ff5722",
+  NORMAL_PATTERN: "#4caf50",
+  ERROR_IN_SCORING: "#9e9e9e",
 };
 
 const scoreToRiskLevel = (score) => {
@@ -51,20 +48,22 @@ const scoreToColor = (score) => {
   return "#4caf50";
 };
 
-// Added toast to props for error notifications
 export default function GraphView({ caseId = null, refreshTrigger = null, toast }) {
   const svgRef = useRef(null);
   const containerRef = useRef(null);
   const [selected, setSelected] = useState(null);
   const [nodes, setNodes] = useState([]);
   const [links, setLinks] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [hoveredNode, setHoveredNode] = useState(null);
   const [copied, setCopied] = useState(false);
   const [zoomTransform, setZoomTransform] = useState(d3.zoomIdentity);
-  const [analyzing, setAnalyzing] = useState(false); // New state for ML button loading
-  const [searchInput, setSearchInput] = useState(""); // New state for search bar
+  const [analyzing, setAnalyzing] = useState(false);
+  
+  // New states for search
+  const [searchInput, setSearchInput] = useState("");
+  const [hasSearched, setHasSearched] = useState(false);
 
   const stats = useMemo(() => {
     if (!nodes.length)
@@ -77,14 +76,10 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
     const uniqueFlags = new Set();
     nodes.forEach((n) => {
       (n.flags || []).forEach((f) =>
-        uniqueFlags.add(
-          typeof f === "string" ? f : f.type || JSON.stringify(f),
-        ),
+        uniqueFlags.add(typeof f === "string" ? f : f.type || JSON.stringify(f))
       );
       (n.patterns || []).forEach((p) =>
-        uniqueFlags.add(
-          typeof p === "string" ? p : p.name || JSON.stringify(p),
-        ),
+        uniqueFlags.add(typeof p === "string" ? p : p.name || JSON.stringify(p))
       );
     });
 
@@ -97,11 +92,20 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Trigger ML Pipeline from the UI
-  const handleDeepAnalysis = async (walletId) => {
+  // Main function to handle search, ML analysis, and graph filtering
+  const handleAnalyzeAndVisualize = async (e) => {
+    if (e) e.preventDefault();
+    const address = searchInput.trim();
+    if (!address) {
+      toast && toast("Please enter a wallet address.");
+      return;
+    }
+
     try {
       setAnalyzing(true);
+      setLoading(true);
       setError("");
+      setHasSearched(true);
 
       const token = localStorage.getItem("chainsleuth_token");
       const headers = {
@@ -109,188 +113,131 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
       };
       if (token) headers.Authorization = `Bearer ${token}`;
 
-      // Updated to use the correct POST endpoint matching WalletsView.jsx
-      const response = await fetch(`${API_BASE_URL}/api/wallets/analyze`, {
+      // 1. Run ML Analysis
+      const mlResponse = await fetch(`${API_BASE_URL}/api/wallets/analyze`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ address: walletId }),
+        body: JSON.stringify({ address }),
       });
-      const data = await response.json();
+      const mlData = await mlResponse.json();
 
-      if (response.ok) {
-        const updatedNodeData = {
-          score: data.riskScore,
-          risk: (data.riskLevel || "low").toLowerCase(),
-          txCount: data.transactionCount,
-          // Safely extract string flag names from the backend array of objects
-          flags: (data.flags || []).map((f) => f.type || f),
-          patterns: data.patterns || [],
-        };
-
-        // Update nodes array to trigger D3 re-render (changes node color immediately)
-        setNodes((prevNodes) =>
-          prevNodes.map((n) =>
-            n.id === walletId ? { ...n, ...updatedNodeData } : n,
-          ),
-        );
-
-        // Update selected node to instantly reflect changes in the details panel
-        setSelected((prevSelected) =>
-          prevSelected && prevSelected.id === walletId
-            ? { ...prevSelected, ...updatedNodeData }
-            : prevSelected,
-        );
-        
-        toast && toast(`Analysis complete. Risk Score: ${data.riskScore}`);
-      } else {
-        if (response.status === 401) {
-          toast && toast("Authentication expired. Please log in again.");
-        } else {
-          setError(data.error || "ML Analysis failed for this wallet.");
-          toast && toast(data.error || "ML Analysis failed.");
-        }
+      if (!mlResponse.ok) {
+        throw new Error(mlData.error || "ML Analysis failed.");
       }
-    } catch (err) {
-      setError("Connection error during ML analysis.");
-      toast && toast("Connection error during ML analysis.");
-    } finally {
-      setAnalyzing(false);
-    }
-  };
+      toast && toast(`Analysis complete. Risk Score: ${mlData.riskScore}`);
 
-  // New handleSearch function to trigger analysis and re-fetch graph
-  const handleSearch = async (e) => {
-    e.preventDefault();
-    const address = searchInput.trim();
-    if (!address) {
-      toast && toast("Please enter a wallet address.");
-      return;
-    }
+      // 2. Fetch Graph Data
+      const graphUrl = caseId
+        ? `${API_BASE_URL}/api/graph?case_id=${caseId}`
+        : `${API_BASE_URL}/api/graph`;
+        
+      const graphResponse = await fetch(graphUrl, { headers });
+      const graphData = await graphResponse.json();
 
-    // Run the deep analysis on the searched address
-    await handleDeepAnalysis(address);
+      if (!graphResponse.ok) {
+        throw new Error(graphData.error || "Failed to fetch graph data");
+      }
 
-    // Re-fetch the graph data to show the new wallet and its connections
-    fetchGraphData();
-  };
+      const rawNodes = graphData.nodes || [];
+      const rawLinks = graphData.links || [];
 
-  useEffect(() => {
-    const fetchGraphData = async () => {
-      try {
-        setLoading(true);
-        setError("");
+      // 3. Filter Graph to only show searched node and its immediate neighbors
+      const validNodeIds = new Set([address]);
+      rawLinks.forEach((link) => {
+        if (link[0] === address) validNodeIds.add(link[1]);
+        if (link[1] === address) validNodeIds.add(link[0]);
+      });
 
-        const token = localStorage.getItem("chainsleuth_token");
-        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const filteredNodes = rawNodes.filter((n) => validNodeIds.has(n.id));
+      const filteredLinks = rawLinks.filter(
+        (l) => validNodeIds.has(l[0]) && validNodeIds.has(l[1])
+      );
 
-        const url = caseId
-          ? `${API_BASE_URL}/api/graph?case_id=${caseId}`
-          : `${API_BASE_URL}/api/graph`;
-
-        const response = await fetch(url, { headers });
-        const data = await response.json();
-
-        if (response.ok) {
-          const rawNodes = data.nodes || [];
-          const rawLinks = data.links || [];
-
-          if (rawNodes.length === 0) {
-            setNodes([]);
-            setLinks([]);
-            return;
-          }
-
-          const enrichedNodes = rawNodes.map((n) => ({
-            ...n,
-            score: n.score || 0,
-            patterns: n.patterns || [],
-            flags: n.flags || [],
-            risk: n.risk || scoreToRiskLevel(n.score || 0),
-            txCount: n.txCount || 0,
-          }));
-
-          const validNodeIds = new Set(enrichedNodes.map((n) => n.id));
-          const safeLinks = rawLinks.filter(
-            (l) => validNodeIds.has(l[0]) && validNodeIds.has(l[1]),
-          );
-
-          const simNodes = enrichedNodes.map((n, i) => ({
-            ...n,
-            x: Math.sin(i * 0.5) * 400 + (Math.random() - 0.5) * 300,
-            y: Math.cos(i * 0.7) * 400 + (Math.random() - 0.5) * 300,
-          }));
-          const simLinks = safeLinks.map((l) => ({
-            source: l[0],
-            target: l[1],
-          }));
-
-          const simulation = d3
-            .forceSimulation(simNodes)
-            .force(
-              "link",
-              d3
-                .forceLink(simLinks)
-                .id((d) => d.id)
-                .distance(120)
-                .strength(0.2),
-            )
-            .force("charge", d3.forceManyBody().strength(-450).distanceMax(800))
-            .force("x", d3.forceX(0).strength(0.01))
-            .force("y", d3.forceY(0).strength(0.01))
-            .force("collide", d3.forceCollide(24))
-            .alphaTarget(0)
-            .stop();
-
-          for (let i = 0; i < 800; ++i) simulation.tick();
-
-          const [xMin, xMax] = d3.extent(simNodes, (d) => d.x);
-          const [yMin, yMax] = d3.extent(simNodes, (d) => d.y);
-
-          const xScale = d3
-            .scaleLinear()
-            .domain([xMin || -1, xMax || 1])
-            .range([0.08, 0.92]);
-          const yScale = d3
-            .scaleLinear()
-            .domain([yMin || -1, yMax || 1])
-            .range([0.08, 0.92]);
-
-          simNodes.forEach((n) => {
-            n.x = xScale(n.x);
-            n.y = yScale(n.y);
-          });
-
-          setNodes(simNodes);
-          setLinks(safeLinks);
-          
-          // If a search was performed, auto-select that node to populate the right panel
-          if (searchInput) {
-            const searchedNode = simNodes.find((n) => n.id === searchInput);
-            if (searchedNode) {
-              setSelected(searchedNode);
-            } else if (simNodes.length > 0 && !selected) {
-              setSelected(simNodes[0]);
-            }
-          } else if (simNodes.length > 0 && !selected) {
-            setSelected(simNodes[0]);
-          }
-        } else {
-          if (response.status === 401) {
-            toast && toast("Authentication expired. Please log in again.");
-          }
-          setError(data.error || "Failed to fetch graph data");
-        }
-      } catch (err) {
-        setError("Connection error - backend not available");
+      if (filteredNodes.length === 0) {
         setNodes([]);
         setLinks([]);
-      } finally {
-        setLoading(false);
+        return;
       }
-    };
 
-    fetchGraphData();
-  }, [caseId, refreshTrigger, toast]);
+      const enrichedNodes = filteredNodes.map((n) => ({
+        ...n,
+        score: n.score || 0,
+        patterns: n.patterns || [],
+        flags: n.flags || [],
+        risk: n.risk || scoreToRiskLevel(n.score || 0),
+        txCount: n.txCount || 0,
+      }));
+
+      const simNodes = enrichedNodes.map((n, i) => ({
+        ...n,
+        x: Math.sin(i * 0.5) * 400 + (Math.random() - 0.5) * 300,
+        y: Math.cos(i * 0.7) * 400 + (Math.random() - 0.5) * 300,
+      }));
+      const simLinks = filteredLinks.map((l) => ({
+        source: l[0],
+        target: l[1],
+      }));
+
+      const simulation = d3
+        .forceSimulation(simNodes)
+        .force(
+          "link",
+          d3.forceLink(simLinks).id((d) => d.id).distance(120).strength(0.2)
+        )
+        .force("charge", d3.forceManyBody().strength(-450).distanceMax(800))
+        .force("x", d3.forceX(0).strength(0.01))
+        .force("y", d3.forceY(0).strength(0.01))
+        .force("collide", d3.forceCollide(24))
+        .alphaTarget(0)
+        .stop();
+
+      for (let i = 0; i < 800; ++i) simulation.tick();
+
+      const [xMin, xMax] = d3.extent(simNodes, (d) => d.x);
+      const [yMin, yMax] = d3.extent(simNodes, (d) => d.y);
+
+      const xScale = d3.scaleLinear().domain([xMin || -1, xMax || 1]).range([0.08, 0.92]);
+      const yScale = d3.scaleLinear().domain([yMin || -1, yMax || 1]).range([0.08, 0.92]);
+
+      simNodes.forEach((n) => {
+        n.x = xScale(n.x);
+        n.y = yScale(n.y);
+      });
+
+      setNodes(simNodes);
+      setLinks(filteredLinks);
+
+      // 4. Auto-select the searched node and inject ML data
+      const searchedNode = simNodes.find((n) => n.id === address);
+      if (searchedNode) {
+        const updatedNodeData = {
+          score: mlData.riskScore,
+          risk: (mlData.riskLevel || "low").toLowerCase(),
+          txCount: mlData.transactionCount,
+          flags: (mlData.flags || []).map((f) => f.type || f),
+          patterns: mlData.patterns || [],
+        };
+        setSelected({ ...searchedNode, ...updatedNodeData });
+      }
+
+    } catch (err) {
+      console.error("Analyze error:", err);
+      setError(err.message || "Connection error during analysis.");
+      toast && toast(err.message || "Connection error during analysis.");
+      setNodes([]);
+      setLinks([]);
+    } finally {
+      setAnalyzing(false);
+      setLoading(false);
+    }
+  };
+
+  // Re-run ML on a node that is already selected in the graph
+  const handleReAnalyzeNode = async (walletId) => {
+    setSearchInput(walletId);
+    // Programmatically trigger the search function
+    handleAnalyzeAndVisualize();
+  };
 
   useEffect(() => {
     const svgEl = svgRef.current;
@@ -321,10 +268,7 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
 
     const defs = svg.append("defs");
     const filter = defs.append("filter").attr("id", "gx-glow");
-    filter
-      .append("feGaussianBlur")
-      .attr("stdDeviation", "4")
-      .attr("result", "b");
+    filter.append("feGaussianBlur").attr("stdDeviation", "4").attr("result", "b");
     const merge = filter.append("feMerge");
     merge.append("feMergeNode").attr("in", "b");
     merge.append("feMergeNode").attr("in", "SourceGraphic");
@@ -381,51 +325,21 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
         .on("mouseleave", () => setHoveredNode(null));
 
       if (isTarget) {
-        grp
-          .append("circle")
-          .attr("r", 16)
-          .attr("fill", "none")
-          .attr("stroke", color)
-          .attr("stroke-width", 2)
-          .attr("opacity", 0.9);
+        grp.append("circle").attr("r", 16).attr("fill", "none").attr("stroke", color).attr("stroke-width", 2).attr("opacity", 0.9);
       }
       if (isHovered) {
-        grp
-          .append("circle")
-          .attr("r", 14)
-          .attr("fill", "none")
-          .attr("stroke", color)
-          .attr("stroke-width", 1.5)
-          .attr("opacity", 0.5)
-          .attr("filter", "url(#gx-glow)");
+        grp.append("circle").attr("r", 14).attr("fill", "none").attr("stroke", color).attr("stroke-width", 1.5).attr("opacity", 0.5).attr("filter", "url(#gx-glow)");
       }
 
-      grp
-        .append("circle")
-        .attr("r", isTarget ? 10 : isHub ? 7 : 5)
-        .attr("fill", "#0a0e10")
-        .attr("stroke", color)
-        .attr("stroke-width", 2);
-
-      grp
-        .append("circle")
-        .attr("r", isTarget || isHub ? 3 : 2)
-        .attr("fill", color);
+      grp.append("circle").attr("r", isTarget ? 10 : isHub ? 7 : 5).attr("fill", "#0a0e10").attr("stroke", color).attr("stroke-width", 2);
+      grp.append("circle").attr("r", isTarget || isHub ? 3 : 2).attr("fill", color);
 
       if (hasFlags) {
-        grp
-          .append("circle")
-          .attr("cx", 8)
-          .attr("cy", -8)
-          .attr("r", 3)
-          .attr("fill", "#ff5c67")
-          .attr("stroke", "#0a0e10")
-          .attr("stroke-width", 1);
+        grp.append("circle").attr("cx", 8).attr("cy", -8).attr("r", 3).attr("fill", "#ff5c67").attr("stroke", "#0a0e10").attr("stroke-width", 1);
       }
 
       if (isTarget || isHub) {
-        grp
-          .append("text")
+        grp.append("text")
           .attr("y", 20)
           .attr("text-anchor", "middle")
           .attr("fill", "#a9b1b3")
@@ -437,8 +351,7 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
       }
 
       if (isTarget) {
-        grp
-          .append("text")
+        grp.append("text")
           .attr("y", -16)
           .attr("text-anchor", "middle")
           .attr("fill", color)
@@ -463,28 +376,93 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
     };
   }, [draw]);
 
-  if (error)
-    return <div style={{ padding: 24, color: "#ff5c67" }}>⚠️ {error}</div>;
-  if (loading)
+  // EMPTY STATE: Before any search is made
+  if (!hasSearched && !loading && !analyzing) {
     return (
-      <div style={{ padding: 24, color: "#626c70" }}>
-        Loading blockchain graph...
+      <div style={{ padding: 24, display: "flex", justifyContent: "center", alignItems: "center", minHeight: "60vh" }}>
+        <div style={{ maxWidth: 600, width: "100%", textAlign: "center" }}>
+          <h2 style={{ fontSize: 24, fontWeight: 800, color: "#f2f5f3", marginBottom: 8 }}>
+            Blockchain Graph Explorer
+          </h2>
+          <p style={{ color: "var(--muted)", fontSize: 14, marginBottom: 24 }}>
+            Enter a wallet address to run a deep ML analysis and visualize its transaction network.
+          </p>
+          <form onSubmit={handleAnalyzeAndVisualize} style={{ display: "flex", gap: 12 }}>
+            <input
+              type="text"
+              placeholder="Enter wallet address (0x...)"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              style={{
+                flex: 1,
+                background: "var(--card)",
+                border: "1px solid var(--line)",
+                borderRadius: 10,
+                padding: "14px 16px",
+                color: "#fff",
+                fontSize: 13,
+                outline: "none",
+                fontFamily: "monospace",
+              }}
+            />
+            <button
+              type="submit"
+              style={{
+                background: "var(--lime)",
+                color: "#081000",
+                border: 0,
+                borderRadius: 10,
+                padding: "14px 24px",
+                fontWeight: 700,
+                cursor: "pointer",
+                fontSize: 13,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <Search size={14} /> Analyze & Visualize
+            </button>
+          </form>
+        </div>
       </div>
     );
-  if (nodes.length === 0)
+  }
+
+  if (loading || analyzing)
     return (
-      <div style={{ padding: 24, color: "#626c70" }}>
-        No network data found. Try analyzing a wallet first.
+      <div style={{ padding: 24, color: "#626c70", display: "flex", alignItems: "center", gap: 12 }}>
+        <Loader size={18} className="animate-spin" />
+        {analyzing ? "Running ML Deep Analysis..." : "Loading blockchain graph..."}
       </div>
     );
 
+  if (error && nodes.length === 0)
+    return (
+      <div style={{ padding: 24 }}>
+        <div style={{ color: "#ff5c67", marginBottom: 16 }}>⚠️ {error}</div>
+        <button onClick={() => { setHasSearched(false); setSearchInput(""); setNodes([]); }} style={{ background: "var(--card)", border: "1px solid var(--line)", color: "var(--lime)", padding: "10px 16px", borderRadius: 8, cursor: "pointer" }}>
+          Try Another Address
+        </button>
+      </div>
+    );
+
+  if (nodes.length === 0)
+    return (
+      <div style={{ padding: 24 }}>
+        <div style={{ color: "#626c70", marginBottom: 16 }}>No network data found for this address. Try analyzing a different wallet.</div>
+        <button onClick={() => { setHasSearched(false); setSearchInput(""); setNodes([]); }} style={{ background: "var(--card)", border: "1px solid var(--line)", color: "var(--lime)", padding: "10px 16px", borderRadius: 8, cursor: "pointer" }}>
+          Search Again
+        </button>
+      </div>
+    );
+
+  // MAIN GRAPH VIEW (After search)
   return (
-    <div
-      className="cx-scale"
-      style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}
-    >
-      {/* SEARCH BAR ADDED HERE */}
-      <form onSubmit={handleSearch} style={{ display: "flex", gap: 12, marginBottom: 8 }}>
+    <div className="cx-scale" style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
+      
+      {/* Search Bar (Stays at top) */}
+      <form onSubmit={handleAnalyzeAndVisualize} style={{ display: "flex", gap: 12, marginBottom: 8 }}>
         <input
           type="text"
           placeholder="Enter wallet address to analyze (0x...)"
@@ -520,456 +498,103 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
             whiteSpace: "nowrap",
           }}
         >
-          <Search size={14} />
+          {analyzing ? <Loader size={14} className="animate-spin" /> : <Search size={14} />}
           {analyzing ? "Analyzing..." : "Analyze & Visualize"}
         </button>
       </form>
 
       {/* 1. TOP STAT SUMMARY CARDS */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-          gap: 12,
-        }}
-      >
-        <div
-          style={{
-            background: "var(--card)",
-            border: "1px solid var(--line)",
-            borderRadius: 12,
-            padding: "14px 16px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 4,
-          }}
-        >
-          <span
-            style={{
-              fontSize: 10,
-              color: "var(--muted)",
-              fontWeight: 700,
-              letterSpacing: ".05em",
-            }}
-          >
-            ANALYZED WALLETS
-          </span>
-          <div style={{ fontSize: 22, fontWeight: 800, color: "#f2f5f3" }}>
-            {stats.total}
-          </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+        <div style={{ background: "var(--card)", border: "1px solid var(--line)", borderRadius: 12, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, letterSpacing: ".05em" }}>ANALYZED WALLETS</span>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#f2f5f3" }}>{stats.total}</div>
         </div>
-        <div
-          style={{
-            background: "var(--card)",
-            border: "1px solid var(--line)",
-            borderRadius: 12,
-            padding: "14px 16px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 4,
-          }}
-        >
-          <span
-            style={{
-              fontSize: 10,
-              color: "var(--muted)",
-              fontWeight: 700,
-              letterSpacing: ".05em",
-            }}
-          >
-            HIGH / CRITICAL RISK
-          </span>
-          <div style={{ fontSize: 22, fontWeight: 800, color: "#ff5c67" }}>
-            {stats.highRisk}
-            <span
-              style={{
-                fontSize: 12,
-                color: "var(--muted)",
-                marginLeft: 6,
-                fontWeight: 500,
-              }}
-            >
-              ({Math.round((stats.highRisk / (stats.total || 1)) * 100)}%)
-            </span>
-          </div>
+        <div style={{ background: "var(--card)", border: "1px solid var(--line)", borderRadius: 12, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, letterSpacing: ".05em" }}>HIGH / CRITICAL RISK</span>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#ff5c67" }}>{stats.highRisk}<span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 6, fontWeight: 500 }}>({Math.round((stats.highRisk / (stats.total || 1)) * 100)}%)</span></div>
         </div>
-        <div
-          style={{
-            background: "var(--card)",
-            border: "1px solid var(--line)",
-            borderRadius: 12,
-            padding: "14px 16px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 4,
-          }}
-        >
-          <span
-            style={{
-              fontSize: 10,
-              color: "var(--muted)",
-              fontWeight: 700,
-              letterSpacing: ".05em",
-            }}
-          >
-            NETWORK RISK INDEX
-          </span>
-          <div
-            style={{
-              fontSize: 22,
-              fontWeight: 800,
-              color: scoreToColor(stats.avgScore),
-            }}
-          >
-            {stats.avgScore}{" "}
-            <span
-              style={{ fontSize: 12, color: "var(--muted)", fontWeight: 400 }}
-            >
-              / 100
-            </span>
-          </div>
+        <div style={{ background: "var(--card)", border: "1px solid var(--line)", borderRadius: 12, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, letterSpacing: ".05em" }}>NETWORK RISK INDEX</span>
+          <div style={{ fontSize: 22, fontWeight: 800, color: scoreToColor(stats.avgScore) }}>{stats.avgScore} <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 400 }}>/ 100</span></div>
         </div>
-        <div
-          style={{
-            background: "var(--card)",
-            border: "1px solid var(--line)",
-            borderRadius: 12,
-            padding: "14px 16px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 4,
-          }}
-        >
-          <span
-            style={{
-              fontSize: 10,
-              color: "var(--muted)",
-              fontWeight: 700,
-              letterSpacing: ".05em",
-            }}
-          >
-            ACTIVE ML ALERTS
-          </span>
-          <div style={{ fontSize: 22, fontWeight: 800, color: "#ffc107" }}>
-            {stats.flagCount}
-          </div>
+        <div style={{ background: "var(--card)", border: "1px solid var(--line)", borderRadius: 12, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, letterSpacing: ".05em" }}>ACTIVE ML ALERTS</span>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#ffc107" }}>{stats.flagCount}</div>
         </div>
       </div>
 
       {/* 2. MAIN GRAPH WORKSPACE */}
-      <div
-        style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 12 }}
-      >
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 12 }}>
         {/* Graph Canvas */}
-        <div
-          style={{
-            background: "var(--card)",
-            border: "1px solid var(--line)",
-            borderRadius: 16,
-            overflow: "hidden",
-            position: "relative",
-          }}
-        >
-          <div
-            style={{
-              padding: "16px 18px",
-              borderBottom: "1px solid var(--line)",
-              fontWeight: 700,
-              fontSize: 14,
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
+        <div style={{ background: "var(--card)", border: "1px solid var(--line)", borderRadius: 16, overflow: "hidden", position: "relative" }}>
+          <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--line)", fontWeight: 700, fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>Transaction Flow Graph</span>
-            <span style={{ fontSize: 11, color: "var(--muted)" }}>
-              {nodes.length} wallets • {links.length} flows
-            </span>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>{nodes.length} wallets • {links.length} flows</span>
           </div>
-          <div
-            ref={containerRef}
-            style={{
-              height: 480,
-              background:
-                "radial-gradient(circle at center, rgba(182,255,0,.045), transparent 55%)",
-            }}
-          >
-            <svg
-              ref={svgRef}
-              style={{ width: "100%", height: "100%", display: "block" }}
-            />
+          <div ref={containerRef} style={{ height: 480, background: "radial-gradient(circle at center, rgba(182,255,0,.045), transparent 55%)" }}>
+            <svg ref={svgRef} style={{ width: "100%", height: "100%", display: "block" }} />
           </div>
         </div>
 
         {/* Details Panel */}
-        <div
-          style={{
-            background: "var(--card)",
-            border: "1px solid var(--line)",
-            borderRadius: 16,
-            padding: 20,
-            overflowY: "auto",
-            maxHeight: 540,
-            display: "flex",
-            flexDirection: "column",
-            gap: 16,
-          }}
-        >
+        <div style={{ background: "var(--card)", border: "1px solid var(--line)", borderRadius: 16, padding: 20, overflowY: "auto", maxHeight: 540, display: "flex", flexDirection: "column", gap: 16 }}>
           {selected ? (
             <>
-              {/* Wallet Address */}
               <div>
-                <div
-                  style={{
-                    fontSize: 10,
-                    color: "var(--lime)",
-                    fontWeight: 800,
-                    letterSpacing: ".1em",
-                    marginBottom: 8,
-                  }}
-                >
-                  WALLET ADDRESS
-                </div>
-                <div
-                  style={{
-                    fontFamily: "monospace",
-                    fontSize: 11,
-                    wordBreak: "break-all",
-                    color: "#f2f5f3",
-                    background: "rgba(0,0,0,.2)",
-                    padding: 8,
-                    borderRadius: 6,
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    gap: 8,
-                  }}
-                >
+                <div style={{ fontSize: 10, color: "var(--lime)", fontWeight: 800, letterSpacing: ".1em", marginBottom: 8 }}>WALLET ADDRESS</div>
+                <div style={{ fontFamily: "monospace", fontSize: 11, wordBreak: "break-all", color: "#f2f5f3", background: "rgba(0,0,0,.2)", padding: 8, borderRadius: 6, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <span>{selected.id}</span>
-                  <button
-                    onClick={() => handleCopy(selected.id)}
-                    style={{
-                      background: "transparent",
-                      border: "none",
-                      color: copied ? "var(--lime)" : "var(--muted)",
-                      cursor: "pointer",
-                      fontSize: 10,
-                      fontWeight: 700,
-                    }}
-                  >
-                    {copied ? "COPIED" : "COPY"}
-                  </button>
+                  <button onClick={() => handleCopy(selected.id)} style={{ background: "transparent", border: "none", color: copied ? "var(--lime)" : "var(--muted)", cursor: "pointer", fontSize: 10, fontWeight: 700 }}>{copied ? "COPIED" : "COPY"}</button>
                 </div>
               </div>
 
-              {/* Run ML Analysis Button */}
-              <button
-                onClick={() => handleDeepAnalysis(selected.id)}
-                disabled={analyzing}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: 8,
-                  background: analyzing ? "#20282b" : "var(--lime)",
-                  color: analyzing ? "var(--muted)" : "#0a0e10",
-                  border: "none",
-                  fontWeight: 800,
-                  fontSize: 12,
-                  cursor: analyzing ? "not-allowed" : "pointer",
-                  transition: "all 0.2s",
-                  opacity: analyzing ? 0.7 : 1,
-                }}
-              >
-                {analyzing ? "RUNNING ML ANALYSIS..." : "RUN ML DEEP ANALYSIS"}
+              <button onClick={() => handleReAnalyzeNode(selected.id)} disabled={analyzing} style={{ padding: "10px 14px", borderRadius: 8, background: analyzing ? "#20282b" : "var(--lime)", color: analyzing ? "var(--muted)" : "#0a0e10", border: "none", fontWeight: 800, fontSize: 12, cursor: analyzing ? "not-allowed" : "pointer", transition: "all 0.2s", opacity: analyzing ? 0.7 : 1 }}>
+                {analyzing ? "RUNNING ML ANALYSIS..." : "RE-RUN ML DEEP ANALYSIS"}
               </button>
 
-              {/* Risk Score Gauge */}
               <div>
-                <div
-                  style={{
-                    fontSize: 10,
-                    color: "var(--muted)",
-                    fontWeight: 700,
-                    marginBottom: 10,
-                  }}
-                >
-                  FRAUD RISK SCORE
-                </div>
-                <div
-                  style={{
-                    width: 100,
-                    height: 100,
-                    borderRadius: "50%",
-                    background: `conic-gradient(${scoreToColor(selected.score)} 0 ${selected.score || 0}%, #20282b ${selected.score || 0}% 100%)`,
-                    display: "grid",
-                    placeItems: "center",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 80,
-                      height: 80,
-                      borderRadius: "50%",
-                      background: "var(--card)",
-                      display: "grid",
-                      placeItems: "center",
-                      fontWeight: 800,
-                      fontSize: 24,
-                      color: scoreToColor(selected.score),
-                    }}
-                  >
-                    {selected.score || 0}
-                  </div>
+                <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, marginBottom: 10 }}>FRAUD RISK SCORE</div>
+                <div style={{ width: 100, height: 100, borderRadius: "50%", background: `conic-gradient(${scoreToColor(selected.score)} 0 ${selected.score || 0}%, #20282b ${selected.score || 0}% 100%)`, display: "grid", placeItems: "center" }}>
+                  <div style={{ width: 80, height: 80, borderRadius: "50%", background: "var(--card)", display: "grid", placeItems: "center", fontWeight: 800, fontSize: 24, color: scoreToColor(selected.score) }}>{selected.score || 0}</div>
                 </div>
               </div>
 
-              {/* Risk Level Badge */}
               <div>
-                <div
-                  style={{
-                    fontSize: 10,
-                    color: "var(--muted)",
-                    fontWeight: 700,
-                    marginBottom: 8,
-                  }}
-                >
-                  RISK LEVEL
-                </div>
-                <div
-                  style={{
-                    display: "inline-block",
-                    padding: "6px 12px",
-                    borderRadius: 6,
-                    background: scoreToColor(selected.score) + "20",
-                    color: scoreToColor(selected.score),
-                    fontSize: 12,
-                    fontWeight: 700,
-                    border: `1px solid ${scoreToColor(selected.score)}40`,
-                  }}
-                >
-                  {scoreToRiskLevel(selected.score).toUpperCase()}
-                </div>
+                <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, marginBottom: 8 }}>RISK LEVEL</div>
+                <div style={{ display: "inline-block", padding: "6px 12px", borderRadius: 6, background: scoreToColor(selected.score) + "20", color: scoreToColor(selected.score), fontSize: 12, fontWeight: 700, border: `1px solid ${scoreToColor(selected.score)}40` }}>{scoreToRiskLevel(selected.score).toUpperCase()}</div>
               </div>
 
-              {/* Fraud Flags / Patterns */}
               {selected.flags && selected.flags.length > 0 && (
                 <div>
-                  <div
-                    style={{
-                      fontSize: 10,
-                      color: "#ff5c67",
-                      fontWeight: 800,
-                      letterSpacing: ".1em",
-                      marginBottom: 8,
-                    }}
-                  >
-                    🚨 FRAUD FLAGS
-                  </div>
+                  <div style={{ fontSize: 10, color: "#ff5c67", fontWeight: 800, letterSpacing: ".1em", marginBottom: 8 }}>🚨 FRAUD FLAGS</div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                     {selected.flags.map((flag, idx) => {
-                      // Safely extract string if backend returned an object
-                      const flagStr =
-                        typeof flag === "string"
-                          ? flag
-                          : flag.type || JSON.stringify(flag);
-                      const color = FRAUD_FLAGS[flagStr] || "#ff5c67"; // Fallback color
-                      return (
-                        <div
-                          key={idx}
-                          style={{
-                            padding: "4px 8px",
-                            borderRadius: 4,
-                            background: color + "20",
-                            color: color,
-                            fontSize: 10,
-                            fontWeight: 600,
-                            border: `1px solid ${color}40`,
-                          }}
-                        >
-                          {flagStr.replace(/_/g, " ")}
-                        </div>
-                      );
+                      const flagStr = typeof flag === "string" ? flag : flag.type || JSON.stringify(flag);
+                      const color = FRAUD_FLAGS[flagStr] || "#ff5c67";
+                      return <div key={idx} style={{ padding: "4px 8px", borderRadius: 4, background: color + "20", color: color, fontSize: 10, fontWeight: 600, border: `1px solid ${color}40` }}>{flagStr.replace(/_/g, " ")}</div>;
                     })}
                   </div>
                 </div>
               )}
 
-              {/* Detected Patterns */}
               {selected.patterns && selected.patterns.length > 0 && (
                 <div>
-                  <div
-                    style={{
-                      fontSize: 10,
-                      color: "var(--lime)",
-                      fontWeight: 800,
-                      letterSpacing: ".1em",
-                      marginBottom: 8,
-                    }}
-                  >
-                    DETECTED PATTERNS
-                  </div>
-                  <div
-                    style={{ display: "flex", flexDirection: "column", gap: 8 }}
-                  >
+                  <div style={{ fontSize: 10, color: "var(--lime)", fontWeight: 800, letterSpacing: ".1em", marginBottom: 8 }}>DETECTED PATTERNS</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {selected.patterns.map((pattern, idx) => (
-                      <div
-                        key={idx}
-                        style={{
-                          padding: 8,
-                          borderRadius: 6,
-                          background: "rgba(76, 175, 80, 0.1)",
-                          border: "1px solid rgba(76, 175, 80, 0.3)",
-                          fontSize: 11,
-                          color: "#a9b1b3",
-                          lineHeight: 1.4,
-                        }}
-                      >
-                        {typeof pattern === "string"
-                          ? pattern
-                          : pattern.name || JSON.stringify(pattern)}
-                      </div>
+                      <div key={idx} style={{ padding: 8, borderRadius: 6, background: "rgba(76, 175, 80, 0.1)", border: "1px solid rgba(76, 175, 80, 0.3)", fontSize: 11, color: "#a9b1b3", lineHeight: 1.4 }}>{typeof pattern === "string" ? pattern : pattern.name || JSON.stringify(pattern)}</div>
                     ))}
                   </div>
                 </div>
               )}
 
-              {/* Network Stats */}
               <div>
-                <div
-                  style={{
-                    fontSize: 10,
-                    color: "var(--muted)",
-                    fontWeight: 700,
-                    marginBottom: 8,
-                  }}
-                >
-                  NETWORK ACTIVITY
-                </div>
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: "#f2f5f3",
-                    padding: 8,
-                    background: "rgba(0,0,0,.2)",
-                    borderRadius: 6,
-                  }}
-                >
-                  {selected.txCount || 0} recorded transactions
-                </div>
+                <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, marginBottom: 8 }}>NETWORK ACTIVITY</div>
+                <div style={{ fontSize: 12, color: "#f2f5f3", padding: 8, background: "rgba(0,0,0,.2)", borderRadius: 6 }}>{selected.txCount || 0} recorded transactions</div>
               </div>
             </>
           ) : (
-            <div
-              style={{
-                color: "var(--dim)",
-                fontSize: 13,
-                textAlign: "center",
-                paddingTop: 80,
-                paddingBottom: 80,
-              }}
-            >
-              ↖️ Click a wallet node
-              <br /> to inspect ML analysis
-            </div>
+            <div style={{ color: "var(--dim)", fontSize: 13, textAlign: "center", paddingTop: 80, paddingBottom: 80 }}>↖️ Click a wallet node<br />to inspect ML analysis</div>
           )}
         </div>
       </div>
