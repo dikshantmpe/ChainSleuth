@@ -1,4 +1,7 @@
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Known OFAC-sanctioned / high-profile exploit addresses (lowercase)
 KNOWN_FLAGGED_WALLETS = {
@@ -32,6 +35,10 @@ def calculate_suspicion_score(wallet_address, transaction_features):
         else:
             features = list(transaction_features)
         
+        # Pad features list to ensure we have at least 10 elements to prevent IndexError
+        while len(features) < 10:
+            features.append(0)
+            
         # Feature indices mapped from app.py:
         # [0]=tx_count, [1]=avg_value, [2]=std_value, [3]=max_value, 
         # [4]=min_value, [7]=unique_recipients, [9]=recipient_ratio
@@ -64,10 +71,11 @@ def calculate_suspicion_score(wallet_address, transaction_features):
             score += 15
             flags.append("UNUSUAL_VALUE_PATTERN")
         
-        # Layer 4: Recipient Diversity & Rapid Layering
+        # Layer 4: Recipient Diversity & Rapid Layering (Fund Splitting)
         if recipient_ratio > 0.8 and tx_count > 20:
             score += 25
             flags.append("HIGH_RECIPIENT_DIVERSITY")
+            flags.append("FUND_SPLITTING") # Added to trigger frontend UI explicitly
         elif recipient_ratio > 0.6 and tx_count > 50:
             score += 15
             flags.append("HIGH_RECIPIENT_DIVERSITY")
@@ -80,7 +88,13 @@ def calculate_suspicion_score(wallet_address, transaction_features):
             score += 10
             flags.append("HIGH_VOLUME")
             
-        # Layer 6: Repetitive Outflows
+        # Layer 6: Rapid Pass-Through (Automated hopping of funds)
+        # High frequency, low average value usually indicates automated peeling/layering
+        if tx_count > 50 and avg_value < 1.0:
+            score += 20
+            flags.append("RAPID_PASS_THROUGH")
+            
+        # Layer 7: Repetitive Outflows
         if tx_count > 10 and avg_value > 0:
             score += 10
             flags.append("REPEATED_TRANSACTIONS")
@@ -110,6 +124,7 @@ def calculate_suspicion_score(wallet_address, transaction_features):
         }
         
     except Exception as e:
+        logger.error(f"Error in ML scoring: {e}")
         return {
             "address": wallet_address,
             "suspicion_score": 50,

@@ -10,6 +10,7 @@ from web3 import Web3
 from fraud_detection import calculate_suspicion_score
 from flask_cors import CORS
 import logging
+import numpy as np
 
 load_dotenv()
 
@@ -51,7 +52,6 @@ class Neo4jConnection:
 
 # Initialize Neo4j connection safely
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-# Check both NEO4J_USER and NEO4J_USERNAME just in case
 NEO4J_USER = os.getenv("NEO4J_USER") or os.getenv("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 
@@ -102,8 +102,6 @@ def fetch_ethereum_transactions(wallet_address):
 
 def extract_features_from_transactions(transactions):
     """Extract features from transactions for fraud detection"""
-    import numpy as np
-    
     if not transactions or len(transactions) == 0:
         return [0] * 166
     
@@ -150,21 +148,47 @@ def extract_features_from_transactions(transactions):
         return [0] * 166
 
 def add_wallet_to_db(address, blockchain, transactions):
-    query = "MERGE (w:Wallet {address: $address, blockchain: $blockchain}) SET w.first_seen = $first_seen, w.last_seen = $last_seen, w.transaction_count = $tx_count, w.total_volume = $total_volume RETURN w"
+    query = """
+    MERGE (w:Wallet {address: $address, blockchain: $blockchain}) 
+    SET w.first_seen = $first_seen, w.last_seen = $last_seen, 
+        w.transaction_count = $tx_count, w.total_volume = $total_volume 
+    RETURN w
+    """
     timestamps = [int(tx.get("timeStamp", 0)) for tx in transactions]
-    params = {"address": address, "blockchain": blockchain, "first_seen": min(timestamps) if timestamps else 0, "last_seen": max(timestamps) if timestamps else 0, "tx_count": len(transactions), "total_volume": sum(float(tx.get("value", 0)) for tx in transactions) / 1e18}
+    params = {
+        "address": address, 
+        "blockchain": blockchain, 
+        "first_seen": min(timestamps) if timestamps else 0, 
+        "last_seen": max(timestamps) if timestamps else 0, 
+        "tx_count": len(transactions), 
+        "total_volume": sum(float(tx.get("value", 0)) for tx in transactions) / 1e18
+    }
     return neo4j_conn.query(query, params)
 
 def add_transactions_to_db(source_address, blockchain, transactions):
     for tx in transactions:
         to_address = tx.get("to")
         if not to_address: continue
-        query = "MATCH (from:Wallet {address: $from_addr}) MERGE (to:Wallet {address: $to_addr, blockchain: $blockchain}) MERGE (from)-[r:SENT_TO]->(to) SET r.amount = coalesce(r.amount, 0) + $amount, r.last_transaction = $timestamp, r.transaction_count = coalesce(r.transaction_count, 0) + 1 RETURN r"
-        neo4j_conn.query(query, {"from_addr": source_address, "to_addr": to_address, "blockchain": blockchain, "amount": float(tx.get("value", 0)) / 1e18, "timestamp": int(tx.get("timeStamp", 0))})
+        query = """
+        MATCH (from:Wallet {address: $from_addr}) 
+        MERGE (to:Wallet {address: $to_addr, blockchain: $blockchain}) 
+        MERGE (from)-[r:SENT_TO]->(to) 
+        SET r.amount = coalesce(r.amount, 0) + $amount, 
+            r.last_transaction = $timestamp, 
+            r.transaction_count = coalesce(r.transaction_count, 0) + 1 
+        RETURN r
+        """
+        neo4j_conn.query(query, {
+            "from_addr": source_address, 
+            "to_addr": to_address, 
+            "blockchain": blockchain, 
+            "amount": float(tx.get("value", 0)) / 1e18, 
+            "timestamp": int(tx.get("timeStamp", 0))
+        })
 
-# ===================== AUTHENTICATION ENDPOINTS =====================
+# ===================== HEALTH & AUTHENTICATION =====================
 
-@app.route('/health', methods=['GET'])
+@app.route('/api/health', methods=['GET'])
 def health():
     return jsonify({"status": "backend is running"}), 200
 
@@ -179,17 +203,19 @@ def login():
         if not email or not password:
             return jsonify({"error": "Email and password required"}), 400
         
-        if not email.endswith("@cybercell.gov.in"):
-            return jsonify({"error": "Use official @cybercell.gov.in email"}), 400
+        # Authenticate against Neo4j
+        query = "MATCH (u:User {email: $email, password: $password}) RETURN u.email as email, u.name as name, u.role as role"
+        result = neo4j_conn.query(query, {"email": email, "password": password})
         
-        if len(password) < 6:
+        if not result:
             return jsonify({"error": "Invalid credentials"}), 401
-        
+            
+        user_data = result[0]
         return jsonify({
             "status": "success",
-            "email": email,
-            "role": role,
-            "name": email.split("@")[0].title(),
+            "email": user_data["email"],
+            "role": user_data.get("role", role),
+            "name": user_data.get("name", email.split("@")[0].title()),
             "token": f"token-{email}"
         }), 200
     except Exception as e:
@@ -208,82 +234,36 @@ def register():
         if not all([name, email, password]):
             return jsonify({"error": "All fields required"}), 400
         
-        if not email.endswith("@cybercell.gov.in"):
-            return jsonify({"error": "Use official @cybercell.gov.in email"}), 400
-        
-        if len(password) < 6:
-            return jsonify({"error": "Password must be 6+ characters"}), 400
+        query = "CREATE (u:User {name: $name, email: $email, password: $password, role: $role}) RETURN u.email as email, u.name as name, u.role as role"
+        result = neo4j_conn.query(query, {"name": name, "email": email, "password": password, "role": role})
         
         return jsonify({
             "status": "success",
-            "email": email,
-            "name": name,
-            "role": role,
+            "email": result[0]["email"],
+            "name": result[0]["name"],
+            "role": result[0]["role"],
             "token": f"token-{email}"
         }), 201
     except Exception as e:
         logger.error(f"Register error: {e}")
         return jsonify({"error": str(e)}), 500
 
-# ===================== WALLET ANALYSIS ENDPOINTS =====================
+# ===================== WALLET ANALYSIS & ML =====================
 
-@app.route('/api/wallet/analyze', methods=['POST'])
+@app.route('/api/wallets/analyze', methods=['POST'])
 def analyze_wallet():
     try:
-        data = request.json
+        data = request.json or {}
         address = data.get("address")
         blockchain = data.get("blockchain", "ethereum").lower()
-        if not address: return jsonify({"error": "No address provided"}), 400
-        transactions = fetch_ethereum_transactions(address)
-        if not transactions: return jsonify({"error": "No transactions found"}), 404
-        add_wallet_to_db(address, blockchain, transactions)
-        add_transactions_to_db(address, blockchain, transactions)
-        return jsonify({"status": "success", "message": f"Analyzed {len(transactions)} transactions", "address": address, "blockchain": blockchain, "transaction_count": len(transactions)}), 200
-    except Exception as e:
-        return handle_db_error(e)
-
-@app.route('/api/wallet/get', methods=['GET'])
-def get_wallet():
-    try:
-        address = request.args.get("address")
-        if not address: return jsonify({"error": "No address provided"}), 400
-        query = "MATCH (w:Wallet {address: $address}) RETURN w.address as address, w.blockchain as blockchain, w.transaction_count as tx_count, w.total_volume as total_volume, w.first_seen as first_seen, w.last_seen as last_seen"
-        result = neo4j_conn.query(query, {"address": address})
-        if not result: return jsonify({"error": "Wallet not found"}), 404
-        return jsonify(result[0]), 200
-    except Exception as e:
-        return handle_db_error(e)
-
-@app.route('/api/wallet/connections', methods=['GET'])
-def get_wallet_connections():
-    try:
-        address = request.args.get("address")
-        if not address: return jsonify({"error": "No address provided"}), 400
-        query = "MATCH (w:Wallet {address: $address})-[r:SENT_TO]->(connected) RETURN connected.address as address, r.amount as total_sent, r.transaction_count as num_transactions, r.last_transaction as last_transaction ORDER BY r.amount DESC"
-        result = neo4j_conn.query(query, {"address": address})
-        return jsonify({"from_address": address, "connected_wallets": result, "total_connections": len(result)}), 200
-    except Exception as e:
-        return handle_db_error(e)
-
-@app.route('/api/wallet/fraud-score', methods=['GET', 'POST'])
-def analyze_fraud_score():
-    try:
-        if request.method == 'GET':
-            address = request.args.get("address")
-            blockchain = request.args.get("blockchain", "ethereum").lower()
-            mode = request.args.get("mode", "full")
-        else:
-            data = request.json or {}
-            address = data.get("address")
-            blockchain = data.get("blockchain", "ethereum").lower()
-            mode = data.get("mode", "full")
         
-        if not address:
+        if not address: 
             return jsonify({"error": "No address provided"}), 400
-        
+            
         if blockchain == "ethereum" and (not address.startswith('0x') or len(address) != 42):
             return jsonify({"error": "Invalid Ethereum address format"}), 400
         
+        # 1. Fetch Live Transactions
         transactions = fetch_ethereum_transactions(address)
         
         if not transactions:
@@ -299,6 +279,7 @@ def analyze_fraud_score():
                 "timestamp": datetime.now().isoformat()
             }), 200
         
+        # 2. Run ML Fraud Detection
         features = extract_features_from_transactions(transactions)
         fraud_data = calculate_suspicion_score(address, features)
         
@@ -315,12 +296,14 @@ def analyze_fraud_score():
         if "RAPID_PASS_THROUGH" in fraud_data.get("flags", []):
             patterns.append({"name": "Rapid Pass-Through", "risk": "HIGH", "confidence": 0.88})
         
+        # 3. Save to Neo4j
         try:
             add_wallet_to_db(address, blockchain, transactions)
             add_transactions_to_db(address, blockchain, transactions)
         except Exception as db_err:
             logger.warning(f"DB error (non-critical): {db_err}")
         
+        # 4. Extract Linked Wallets for UI
         linked_wallets = []
         recipients = {}
         for tx in transactions:
@@ -349,10 +332,24 @@ def analyze_fraud_score():
         }), 200
     
     except Exception as e:
-        logger.error(f"Fraud score error: {e}")
+        logger.error(f"Analysis error: {e}")
         return jsonify({"error": str(e)}), 500
 
-# ===================== WALLET EXPLORER ENDPOINTS =====================
+@app.route('/api/wallets/<path:address>/connections', methods=['GET'])
+def get_wallet_connections(address):
+    try:
+        query = """
+        MATCH (w:Wallet {address: $address})-[r:SENT_TO]->(connected)
+        RETURN connected.address as address, r.amount as total_sent, 
+               r.transaction_count as num_transactions, r.last_transaction as last_transaction 
+        ORDER BY r.amount DESC
+        """
+        result = neo4j_conn.query(query, {"address": address})
+        return jsonify({"from_address": address, "connected_wallets": result, "total_connections": len(result)}), 200
+    except Exception as e:
+        return handle_db_error(e)
+
+# ===================== WALLET EXPLORER =====================
 
 @app.route('/api/wallets', methods=['GET'])
 def get_all_wallets():
@@ -373,7 +370,7 @@ def add_global_wallet():
     except Exception as e:
         return handle_db_error(e)
 
-# ===================== CASE MANAGEMENT ENDPOINTS =====================
+# ===================== CASE MANAGEMENT =====================
 
 @app.route('/api/cases', methods=['GET'])
 def get_cases():
@@ -426,7 +423,7 @@ def add_case_wallet(case_id):
     except Exception as e:
         return handle_db_error(e)
 
-# ===================== TRANSACTION EXPLORER ENDPOINTS =====================
+# ===================== TRANSACTION EXPLORER =====================
 
 @app.route('/api/transactions', methods=['GET'])
 def get_transactions():
@@ -486,7 +483,7 @@ def search_transactions():
     except Exception as e:
         return handle_db_error(e)
 
-# ===================== BLOCKCHAIN GRAPH ENDPOINTS =====================
+# ===================== BLOCKCHAIN GRAPH =====================
 
 @app.route('/api/graph', methods=['GET'])
 def get_graph():
@@ -543,7 +540,7 @@ def get_graph():
         logger.error(f"Graph Error: {str(e)}")
         return handle_db_error(e)
 
-# ===================== DASHBOARD ENDPOINTS =====================
+# ===================== DASHBOARD =====================
 
 @app.route('/api/dashboard/stats', methods=['GET'])
 def get_dashboard_stats():
@@ -558,12 +555,9 @@ def get_dashboard_stats():
                 {"label": "Transactions Traced", "value": str(transaction_count[0]['total_transactions'] if transaction_count else 0), "note": "Fund flows mapped", "icon": "TrendingUp"}
             ],
             "chartData": [
-                {"month": "Jan", "crores": 45},
-                {"month": "Feb", "crores": 52},
-                {"month": "Mar", "crores": 48},
-                {"month": "Apr", "crores": 61},
-                {"month": "May", "crores": 55},
-                {"month": "Jun", "crores": 67}
+                {"month": "Jan", "crores": 45}, {"month": "Feb", "crores": 52},
+                {"month": "Mar", "crores": 48}, {"month": "Apr", "crores": 61},
+                {"month": "May", "crores": 55}, {"month": "Jun", "crores": 67}
             ]
         }), 200
     except Exception as e:
@@ -602,7 +596,8 @@ if __name__ == '__main__':
     logger.info("   - /api/register (Registration)")
     logger.info("   - /api/cases (Case Management)")
     logger.info("   - /api/wallets (Wallet Explorer)")
-    logger.info("   - /api/wallet/fraud-score (Analysis - GET/POST)")
+    logger.info("   - /api/wallets/analyze (Analysis - POST)")
+    logger.info("   - /api/wallets/<address>/connections (Graph Data)")
     logger.info("   - /api/transactions (Transaction Explorer)")
     logger.info("   - /api/graph (Blockchain Graph)")
     logger.info("   - /api/dashboard/* (Dashboard Telemetry)")

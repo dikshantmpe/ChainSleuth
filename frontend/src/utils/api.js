@@ -1,7 +1,7 @@
 // API utility functions for ChainSleuth backend
 
-// Fixed: Vite uses import.meta.env for environment variables
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
+// Fixed: Pointing to live Render backend
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://chainsleuth-backend.onrender.com";
 
 // Helper function to handle API errors
 const handleApiError = (response, data) => {
@@ -12,30 +12,10 @@ const handleApiError = (response, data) => {
   return data;
 };
 
-// Helper for mock fallback
-const createMockFraudResponse = (address, blockchain) => {
-  return {
-    wallet: address,
-    blockchain,
-    riskScore: 87,
-    riskLevel: "HIGH",
-    patterns: [
-      { name: "Rapid Pass-Through", risk: "HIGH", confidence: 0.92 },
-      { name: "Fund Splitting", risk: "MEDIUM", confidence: 0.78 },
-      { name: "Timing Anomaly", risk: "MEDIUM", confidence: 0.65 }
-    ],
-    linkedWallets: [
-      { address: "0xABC123...", type: "exchange", risk: "HIGH" },
-      { address: "0xDEF456...", type: "mixer", risk: "CRITICAL" },
-      { address: "0xGHI789...", type: "flagged", risk: "HIGH" }
-    ],
-    transactionCount: 247,
-    flags: [
-      { type: "OFAC", message: "Address flagged in OFAC database" },
-      { type: "MIXER", message: "Connected to known mixing service" }
-    ],
-    timestamp: new Date().toISOString()
-  };
+// Helper to get auth headers
+const getAuthHeaders = () => {
+  const token = localStorage.getItem("cs_token") || localStorage.getItem("token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
 // Authentication
@@ -49,43 +29,45 @@ export const login = async (email, password, role = "investigator") => {
   return handleApiError(response, data);
 };
 
-// Wallet Analysis - POST version (recommended)
+// Wallet Analysis - Connects to Etherscan + ML Model on backend
 export const analyzeFraudScore = async (params) => {
   const { address, blockchain = "ethereum", mode = "full" } = params;
   
-  try {
-    const response = await fetch(`${API_BASE}/api/wallet/fraud-score`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ address, blockchain, mode })
-    });
-    const data = await response.json();
-    return handleApiError(response, data);
-  } catch (error) {
-    console.warn("Fraud score API failed, using mock data:", error.message);
-    return createMockFraudResponse(address, blockchain);
-  }
+  const response = await fetch(`${API_BASE}/api/wallets/analyze`, {
+    method: "POST",
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
+    body: JSON.stringify({ address, blockchain, mode })
+  });
+  const data = await response.json();
+  return handleApiError(response, data);
 };
 
 // Wallet Analysis - GET version (legacy compatibility)
 export const analyzeFraudScoreGet = async (address, blockchain = "ethereum") => {
-  try {
-    const response = await fetch(
-      `${API_BASE}/api/wallet/fraud-score?address=${encodeURIComponent(address)}&blockchain=${blockchain}`,
-      { method: "GET", headers: { "Content-Type": "application/json" } }
-    );
-    const data = await response.json();
-    return handleApiError(response, data);
-  } catch (error) {
-    console.warn("Fraud score API failed, using mock data:", error.message);
-    return createMockFraudResponse(address, blockchain);
-  }
+  const response = await fetch(
+    `${API_BASE}/api/wallets/analyze?address=${encodeURIComponent(address)}&blockchain=${blockchain}`,
+    { 
+      method: "GET", 
+      headers: { 
+        "Content-Type": "application/json",
+        ...getAuthHeaders()
+      }
+    }
+  );
+  const data = await response.json();
+  return handleApiError(response, data);
 };
 
 export const analyzeWallet = async (address, blockchain = "ethereum", mode = "full") => {
-  const response = await fetch(`${API_BASE}/api/wallet/analyze`, {
+  const response = await fetch(`${API_BASE}/api/wallets/analyze`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
     body: JSON.stringify({ address, blockchain, mode })
   });
   const data = await response.json();
@@ -95,9 +77,12 @@ export const analyzeWallet = async (address, blockchain = "ethereum", mode = "fu
 // Get Neo4j Wallet Connections
 export const getWalletConnections = async (address) => {
   try {
-    const response = await fetch(`${API_BASE}/api/wallet/connections?address=${encodeURIComponent(address)}`, {
+    const response = await fetch(`${API_BASE}/api/wallets/${encodeURIComponent(address)}/connections`, {
       method: "GET",
-      headers: { "Content-Type": "application/json" }
+      headers: { 
+        "Content-Type": "application/json",
+        ...getAuthHeaders()
+      }
     });
     const data = await response.json();
     return handleApiError(response, data);
@@ -111,7 +96,10 @@ export const getWalletConnections = async (address) => {
 export const getDashboardStats = async () => {
   const response = await fetch(`${API_BASE}/api/dashboard/stats`, {
     method: "GET",
-    headers: { "Content-Type": "application/json" }
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    }
   });
   const data = await response.json();
   return handleApiError(response, data);
@@ -120,7 +108,10 @@ export const getDashboardStats = async () => {
 export const getDashboardAlerts = async () => {
   const response = await fetch(`${API_BASE}/api/dashboard/alerts`, {
     method: "GET",
-    headers: { "Content-Type": "application/json" }
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    }
   });
   const data = await response.json();
   return handleApiError(response, data);
@@ -130,7 +121,10 @@ export const getDashboardAlerts = async () => {
 export const getCases = async () => {
   const response = await fetch(`${API_BASE}/api/cases`, {
     method: "GET",
-    headers: { "Content-Type": "application/json" }
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    }
   });
   const data = await response.json();
   return handleApiError(response, data);
@@ -139,7 +133,10 @@ export const getCases = async () => {
 export const getCaseDetail = async (caseId) => {
   const response = await fetch(`${API_BASE}/api/cases/${caseId}`, {
     method: "GET",
-    headers: { "Content-Type": "application/json" }
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    }
   });
   const data = await response.json();
   return handleApiError(response, data);
@@ -148,7 +145,10 @@ export const getCaseDetail = async (caseId) => {
 export const createCase = async (caseData) => {
   const response = await fetch(`${API_BASE}/api/cases`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
     body: JSON.stringify(caseData)
   });
   const data = await response.json();
@@ -158,7 +158,10 @@ export const createCase = async (caseData) => {
 export const updateCase = async (caseId, caseData) => {
   const response = await fetch(`${API_BASE}/api/cases/${caseId}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
     body: JSON.stringify(caseData)
   });
   const data = await response.json();
@@ -173,7 +176,10 @@ export const getWallets = async (caseId = null) => {
   
   const response = await fetch(url, {
     method: "GET",
-    headers: { "Content-Type": "application/json" }
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    }
   });
   const data = await response.json();
   return handleApiError(response, data);
@@ -182,7 +188,10 @@ export const getWallets = async (caseId = null) => {
 export const getWalletDetail = async (address) => {
   const response = await fetch(`${API_BASE}/api/wallets/${encodeURIComponent(address)}`, {
     method: "GET",
-    headers: { "Content-Type": "application/json" }
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    }
   });
   const data = await response.json();
   return handleApiError(response, data);
@@ -198,7 +207,10 @@ export const getTransactions = async (filters = {}) => {
 
   const response = await fetch(`${API_BASE}/api/transactions?${params}`, {
     method: "GET",
-    headers: { "Content-Type": "application/json" }
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    }
   });
   const data = await response.json();
   return handleApiError(response, data);
@@ -207,7 +219,13 @@ export const getTransactions = async (filters = {}) => {
 export const searchTransactions = async (query) => {
   const response = await fetch(
     `${API_BASE}/api/transactions/search?q=${encodeURIComponent(query)}`,
-    { method: "GET", headers: { "Content-Type": "application/json" } }
+    { 
+      method: "GET", 
+      headers: { 
+        "Content-Type": "application/json",
+        ...getAuthHeaders()
+      }
+    }
   );
   const data = await response.json();
   return handleApiError(response, data);
@@ -221,7 +239,10 @@ export const getGraphData = async (caseId = null) => {
   
   const response = await fetch(url, {
     method: "GET",
-    headers: { "Content-Type": "application/json" }
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    }
   });
   const data = await response.json();
   return handleApiError(response, data);
@@ -235,7 +256,10 @@ export const getPatterns = async (caseId = null) => {
   
   const response = await fetch(url, {
     method: "GET",
-    headers: { "Content-Type": "application/json" }
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    }
   });
   const data = await response.json();
   return handleApiError(response, data);
@@ -245,7 +269,10 @@ export const getPatterns = async (caseId = null) => {
 export const generateReport = async (caseId, format = "pdf") => {
   const response = await fetch(`${API_BASE}/api/cases/${caseId}/report`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
     body: JSON.stringify({ format })
   });
   const data = await response.json();
@@ -256,7 +283,10 @@ export const generateReport = async (caseId, format = "pdf") => {
 export const getInvestigators = async () => {
   const response = await fetch(`${API_BASE}/api/admin/investigators`, {
     method: "GET",
-    headers: { "Content-Type": "application/json" }
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    }
   });
   const data = await response.json();
   return handleApiError(response, data);
@@ -265,7 +295,10 @@ export const getInvestigators = async () => {
 export const createInvestigator = async (investigatorData) => {
   const response = await fetch(`${API_BASE}/api/admin/investigators`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
     body: JSON.stringify(investigatorData)
   });
   const data = await response.json();
@@ -275,7 +308,10 @@ export const createInvestigator = async (investigatorData) => {
 export const updateInvestigator = async (investigatorId, investigatorData) => {
   const response = await fetch(`${API_BASE}/api/admin/investigators/${investigatorId}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
     body: JSON.stringify(investigatorData)
   });
   const data = await response.json();
@@ -285,7 +321,10 @@ export const updateInvestigator = async (investigatorId, investigatorData) => {
 export const deleteInvestigator = async (investigatorId) => {
   const response = await fetch(`${API_BASE}/api/admin/investigators/${investigatorId}`, {
     method: "DELETE",
-    headers: { "Content-Type": "application/json" }
+    headers: { 
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    }
   });
   const data = await response.json();
   return handleApiError(response, data);
@@ -296,7 +335,7 @@ export const loadDemoData = async () => {
   try {
     const response = await fetch(`${API_BASE}/api/demo/investigation`, {
       headers: {
-        Authorization: `Bearer ${localStorage.getItem("cs_token") || ""}`
+        ...getAuthHeaders()
       }
     });
 
@@ -346,7 +385,7 @@ export const searchWallet = async (address, blockchain = "ethereum") => {
       `${API_BASE}/api/wallet/search?address=${encodeURIComponent(address)}&blockchain=${blockchain}`,
       {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem("cs_token") || ""}`
+          ...getAuthHeaders()
         }
       }
     );
@@ -369,7 +408,7 @@ export const getNetworkGraph = async (address, blockchain = "ethereum", depth = 
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("cs_token") || ""}`
+        ...getAuthHeaders()
       },
       body: JSON.stringify({
         startAddress: address,
@@ -396,7 +435,7 @@ export const exportCourtReport = async (caseId, format = "pdf") => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("cs_token") || ""}`
+        ...getAuthHeaders()
       },
       body: JSON.stringify({ format })
     });
