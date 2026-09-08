@@ -59,12 +59,11 @@ export default function AIView({ caseId, toast }) {
       };
       if (token) headers.Authorization = `Bearer ${token}`;
 
-      // Updated to use the correct POST endpoint matching WalletsView.jsx
-      const res = await fetch(`${API_BASE_URL}/api/wallets/analyze`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ address: address.trim() }),
-      });
+      // Reverted back to the original GET endpoint your backend expects
+      const res = await fetch(
+        `${API_BASE_URL}/api/wallet/fraud-score?address=${address.trim()}`,
+        { headers }
+      );
       const data = await res.json();
 
       if (res.ok) {
