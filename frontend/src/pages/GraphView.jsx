@@ -50,7 +50,8 @@ const scoreToColor = (score) => {
   return "#4caf50";
 };
 
-export default function GraphView({ caseId = null, refreshTrigger = null }) {
+// Added toast to props for error notifications
+export default function GraphView({ caseId = null, refreshTrigger = null, toast }) {
   const svgRef = useRef(null);
   const containerRef = useRef(null);
   const [selected, setSelected] = useState(null);
@@ -100,19 +101,28 @@ export default function GraphView({ caseId = null, refreshTrigger = null }) {
       setAnalyzing(true);
       setError("");
 
-      const response = await fetch(
-        `${API_BASE_URL}/api/wallet/fraud-score?address=${walletId}`,
-      );
+      const token = localStorage.getItem("chainsleuth_token");
+      const headers = {
+        "Content-Type": "application/json",
+      };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      // Updated to use the correct POST endpoint matching WalletsView.jsx
+      const response = await fetch(`${API_BASE_URL}/api/wallets/analyze`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ address: walletId }),
+      });
       const data = await response.json();
 
       if (response.ok) {
         const updatedNodeData = {
           score: data.riskScore,
-          risk: data.riskLevel.toLowerCase(),
+          risk: (data.riskLevel || "low").toLowerCase(),
           txCount: data.transactionCount,
-          // Extract string flag names from the backend array of objects
-          flags: data.flags.map((f) => f.type || f),
-          patterns: data.patterns,
+          // Safely extract string flag names from the backend array of objects
+          flags: (data.flags || []).map((f) => f.type || f),
+          patterns: data.patterns || [],
         };
 
         // Update nodes array to trigger D3 re-render (changes node color immediately)
@@ -128,11 +138,19 @@ export default function GraphView({ caseId = null, refreshTrigger = null }) {
             ? { ...prevSelected, ...updatedNodeData }
             : prevSelected,
         );
+        
+        toast && toast(`Analysis complete. Risk Score: ${data.riskScore}`);
       } else {
-        setError(data.error || "ML Analysis failed for this wallet.");
+        if (response.status === 401) {
+          toast && toast("Authentication expired. Please log in again.");
+        } else {
+          setError(data.error || "ML Analysis failed for this wallet.");
+          toast && toast(data.error || "ML Analysis failed.");
+        }
       }
     } catch (err) {
       setError("Connection error during ML analysis.");
+      toast && toast("Connection error during ML analysis.");
     } finally {
       setAnalyzing(false);
     }
@@ -144,11 +162,14 @@ export default function GraphView({ caseId = null, refreshTrigger = null }) {
         setLoading(true);
         setError("");
 
+        const token = localStorage.getItem("chainsleuth_token");
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
         const url = caseId
           ? `${API_BASE_URL}/api/graph?case_id=${caseId}`
           : `${API_BASE_URL}/api/graph`;
 
-        const response = await fetch(url);
+        const response = await fetch(url, { headers });
         const data = await response.json();
 
         if (response.ok) {
@@ -227,6 +248,9 @@ export default function GraphView({ caseId = null, refreshTrigger = null }) {
             setSelected(simNodes[0]);
           }
         } else {
+          if (response.status === 401) {
+            toast && toast("Authentication expired. Please log in again.");
+          }
           setError(data.error || "Failed to fetch graph data");
         }
       } catch (err) {
@@ -239,7 +263,7 @@ export default function GraphView({ caseId = null, refreshTrigger = null }) {
     };
 
     fetchGraphData();
-  }, [caseId, refreshTrigger]);
+  }, [caseId, refreshTrigger, toast]);
 
   useEffect(() => {
     const svgEl = svgRef.current;
