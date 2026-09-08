@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Search, ChevronLeft, ChevronRight, Copy } from "lucide-react";
+import { Search, ChevronLeft, ChevronRight, Copy, X } from "lucide-react";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
@@ -7,18 +7,14 @@ const API_BASE_URL =
 export default function TransactionsView({ caseId, toast }) {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [searchAddress, setSearchAddress] = useState("");
+  const [searchInput, setSearchInput] = useState(""); // State for the text input
+  const [searchQuery, setSearchQuery] = useState(""); // State for the submitted query
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
   const [pageSize] = useState(20);
   const [copied, setCopied] = useState("");
 
-  // Reset to page 0 whenever a new search is submitted
-  useEffect(() => {
-    setPage(0);
-  }, [searchAddress]);
-
-  // Fetch transactions from backend
+  // Fetch transactions from backend whenever the page or search query changes
   useEffect(() => {
     const fetchTransactions = async () => {
       try {
@@ -26,8 +22,9 @@ export default function TransactionsView({ caseId, toast }) {
         const token = localStorage.getItem("chainsleuth_token");
         const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
-        const url = searchAddress
-          ? `${API_BASE_URL}/api/transactions/search?q=${searchAddress}`
+        // Append limit and offset to both standard and search endpoints
+        const url = searchQuery
+          ? `${API_BASE_URL}/api/transactions/search?q=${searchQuery}&limit=${pageSize}&offset=${page * pageSize}`
           : `${API_BASE_URL}/api/transactions?limit=${pageSize}&offset=${page * pageSize}`;
 
         const response = await fetch(url, { headers });
@@ -54,11 +51,18 @@ export default function TransactionsView({ caseId, toast }) {
     };
 
     fetchTransactions();
-  }, [searchAddress, page, pageSize, toast]);
+  }, [searchQuery, page, pageSize, toast]);
 
   const handleSearch = (e) => {
     e.preventDefault();
-    // The useEffect on searchAddress will handle the actual fetch and page reset
+    setSearchQuery(searchInput.trim());
+    setPage(0); // Reset to first page on new search
+  };
+
+  const clearSearch = () => {
+    setSearchInput("");
+    setSearchQuery("");
+    setPage(0);
   };
 
   const copyToClipboard = (text) => {
@@ -81,8 +85,10 @@ export default function TransactionsView({ caseId, toast }) {
         .tx-search input { flex: 1; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; color: #fff; font-size: 13px; outline: none; font-family: monospace; }
         .tx-search input::placeholder { color: var(--dim); }
         .tx-search input:focus { border-color: rgba(182,255,0,.5); }
-        .tx-search button { background: var(--lime); color: #081000; border: 0; border-radius: 10px; padding: 12px 20px; font-weight: 700; cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+        .tx-search button { background: var(--lime); color: #081000; border: 0; border-radius: 10px; padding: 12px 20px; font-weight: 700; cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s; }
         .tx-search button:hover { opacity: 0.9; }
+        .tx-clear { background: var(--card) !important; color: var(--dim) !important; border: 1px solid var(--line) !important; }
+        .tx-clear:hover { border-color: var(--danger) !important; color: var(--danger) !important; opacity: 1 !important; }
         .tx-table { background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
         .tx-header { display: grid; grid-template-columns: 2fr 2fr 1.5fr 1fr 1fr; gap: 16px; padding: 16px 20px; background: rgba(255,255,255,.02); font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); }
         .tx-row { display: grid; grid-template-columns: 2fr 2fr 1.5fr 1fr 1fr; gap: 16px; padding: 14px 20px; border-bottom: 1px solid rgba(255,255,255,.04); align-items: center; font-size: 12px; }
@@ -105,9 +111,14 @@ export default function TransactionsView({ caseId, toast }) {
           <input
             type="text"
             placeholder="Search by wallet address (0x...)"
-            value={searchAddress}
-            onChange={(e) => setSearchAddress(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
           />
+          {searchQuery && (
+            <button type="button" className="tx-clear" onClick={clearSearch}>
+              <X size={14} /> Clear
+            </button>
+          )}
           <button type="submit">
             <Search size={14} /> Search
           </button>
@@ -118,7 +129,9 @@ export default function TransactionsView({ caseId, toast }) {
           {loading ? (
             <div className="tx-empty">Loading live transactions from Neo4j...</div>
           ) : transactions.length === 0 ? (
-            <div className="tx-empty">No transactions found. Try analyzing a wallet first to populate the database.</div>
+            <div className="tx-empty">
+              No transactions found. Try analyzing a wallet first or searching for a different address.
+            </div>
           ) : (
             <>
               <div className="tx-header">
@@ -146,8 +159,11 @@ export default function TransactionsView({ caseId, toast }) {
                     {shortAddr(tx.to)}
                     <Copy size={12} color="var(--dim)" />
                   </div>
-                  <div className="tx-amount">{tx.amount.toFixed(4)}</div>
-                  <div>{tx.count}</div>
+                  {/* Safely format amount to avoid crashes if null/undefined */}
+                  <div className="tx-amount">
+                    {Number(tx.amount || 0).toFixed(4)}
+                  </div>
+                  <div>{tx.count || 1}</div>
                   <div>
                     {tx.timestamp
                       ? new Date(tx.timestamp * 1000).toLocaleDateString()
@@ -160,7 +176,7 @@ export default function TransactionsView({ caseId, toast }) {
         </div>
 
         {/* Pagination */}
-        {!searchAddress && transactions.length > 0 && (
+        {transactions.length > 0 && (
           <div className="tx-pagination">
             <span>
               Page {page + 1} of {totalPages} — {total} total transactions
