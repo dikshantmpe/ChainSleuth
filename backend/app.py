@@ -85,7 +85,6 @@ def fetch_ethereum_transactions(wallet_address):
         return []
     
     try:
-        # Added sort=asc to ensure we get oldest transactions first
         url = f"https://api.etherscan.io/api?module=account&action=txlist&address={wallet_address}&startblock=0&endblock=99999999&sort=asc&apikey={ETHERSCAN_API_KEY}"
         response = requests.get(url, timeout=15)
         data = response.json()
@@ -93,7 +92,6 @@ def fetch_ethereum_transactions(wallet_address):
         # Log the exact response from Etherscan for debugging
         logger.info(f"Etherscan Status: {data.get('status')}, Message: {data.get('message')}")
         
-        # Ensure result is a list (Etherscan returns a string error message if it fails)
         if data.get('status') == '1' and isinstance(data.get('result'), list):
             logger.info(f"✅ Fetched {len(data['result'])} transactions from Etherscan")
             return data['result']
