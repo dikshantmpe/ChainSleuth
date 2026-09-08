@@ -77,7 +77,7 @@ def handle_db_error(e):
         return jsonify({"error": str(e)}), 500
 
 def fetch_ethereum_transactions(wallet_address):
-    """Fetch real transactions from Etherscan API"""
+    """Fetch real transactions from Etherscan API V2"""
     ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY', '')
     
     if not ETHERSCAN_API_KEY:
@@ -85,22 +85,27 @@ def fetch_ethereum_transactions(wallet_address):
         return []
     
     try:
-        url = f"https://api.etherscan.io/api?module=account&action=txlist&address={wallet_address}&startblock=0&endblock=99999999&sort=asc&apikey={ETHERSCAN_API_KEY}"
+        # UPDATED: Using Etherscan API V2 endpoint with chainid=1 for Ethereum Mainnet
+        url = f"https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address={wallet_address}&startblock=0&endblock=99999999&sort=asc&apikey={ETHERSCAN_API_KEY}"
         response = requests.get(url, timeout=15)
         data = response.json()
         
         # Log the exact response from Etherscan for debugging
-        logger.info(f"Etherscan Status: {data.get('status')}, Message: {data.get('message')}")
+        logger.info(f"Etherscan V2 Status: {data.get('status')}, Message: {data.get('message')}")
         
         if data.get('status') == '1' and isinstance(data.get('result'), list):
-            logger.info(f"✅ Fetched {len(data['result'])} transactions from Etherscan")
+            logger.info(f"✅ Fetched {len(data['result'])} transactions from Etherscan V2")
             return data['result']
         else:
-            logger.error(f"❌ Etherscan API Error: {data.get('result')}")
+            # Handle the "No transactions found" string response cleanly
+            if data.get('result') == "No transactions found":
+                logger.info(f"No transactions found for {wallet_address}.")
+            else:
+                logger.error(f"❌ Etherscan API V2 Error: {data.get('message')} | Details: {data.get('result')}")
             return []
             
     except Exception as e:
-        logger.error(f"❌ Etherscan request failed: {e}")
+        logger.error(f"❌ Etherscan V2 request failed: {e}")
         return []
 
 def extract_features_from_transactions(transactions):
