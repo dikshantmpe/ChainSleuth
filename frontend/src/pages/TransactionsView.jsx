@@ -7,14 +7,13 @@ const API_BASE_URL =
 export default function TransactionsView({ caseId, toast }) {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [searchInput, setSearchInput] = useState(""); // State for the text input
-  const [searchQuery, setSearchQuery] = useState(""); // State for the submitted query
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
   const [pageSize] = useState(20);
   const [copied, setCopied] = useState("");
 
-  // Fetch transactions from backend whenever the page or search query changes
   useEffect(() => {
     const fetchTransactions = async () => {
       try {
@@ -22,7 +21,6 @@ export default function TransactionsView({ caseId, toast }) {
         const token = localStorage.getItem("chainsleuth_token");
         const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
-        // Append limit and offset to both standard and search endpoints
         const url = searchQuery
           ? `${API_BASE_URL}/api/transactions/search?q=${searchQuery}&limit=${pageSize}&offset=${page * pageSize}`
           : `${API_BASE_URL}/api/transactions?limit=${pageSize}&offset=${page * pageSize}`;
@@ -56,7 +54,7 @@ export default function TransactionsView({ caseId, toast }) {
   const handleSearch = (e) => {
     e.preventDefault();
     setSearchQuery(searchInput.trim());
-    setPage(0); // Reset to first page on new search
+    setPage(0);
   };
 
   const clearSearch = () => {
@@ -72,8 +70,17 @@ export default function TransactionsView({ caseId, toast }) {
     toast && toast("Address copied to clipboard.");
   };
 
-  const shortAddr = (addr) =>
-    addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : "N/A";
+  // Removed shortAddr to show the full address in the table
+  const renderAddress = (addr) => (
+    <div
+      className="tx-addr"
+      onClick={() => copyToClipboard(addr)}
+      title={addr}
+    >
+      <span className="tx-full-addr">{addr || "N/A"}</span>
+      <Copy size={12} color="var(--dim)" />
+    </div>
+  );
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -85,17 +92,27 @@ export default function TransactionsView({ caseId, toast }) {
         .tx-search input { flex: 1; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; color: #fff; font-size: 13px; outline: none; font-family: monospace; }
         .tx-search input::placeholder { color: var(--dim); }
         .tx-search input:focus { border-color: rgba(182,255,0,.5); }
-        .tx-search button { background: var(--lime); color: #081000; border: 0; border-radius: 10px; padding: 12px 20px; font-weight: 700; cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s; }
+        .tx-search button { background: var(--lime); color: #081000; border: 0; border-radius: 10px; padding: 12px 20px; font-weight: 700; cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s; white-space: nowrap; }
         .tx-search button:hover { opacity: 0.9; }
         .tx-clear { background: var(--card) !important; color: var(--dim) !important; border: 1px solid var(--line) !important; }
         .tx-clear:hover { border-color: var(--danger) !important; color: var(--danger) !important; opacity: 1 !important; }
+        
+        /* Search Banner */
+        .tx-banner { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: rgba(182,255,0,0.05); border: 1px solid rgba(182,255,0,0.2); border-radius: 10px; font-size: 13px; margin-bottom: 16px; }
+        .tx-banner-label { color: var(--dim); }
+        .tx-banner-addr { color: var(--lime); font-family: monospace; word-break: break-all; flex: 1; }
+        
+        /* Table Styles */
         .tx-table { background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
-        .tx-header { display: grid; grid-template-columns: 2fr 2fr 1.5fr 1fr 1fr; gap: 16px; padding: 16px 20px; background: rgba(255,255,255,.02); font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); }
-        .tx-row { display: grid; grid-template-columns: 2fr 2fr 1.5fr 1fr 1fr; gap: 16px; padding: 14px 20px; border-bottom: 1px solid rgba(255,255,255,.04); align-items: center; font-size: 12px; }
+        .tx-header { display: grid; grid-template-columns: 3fr 3fr 1.5fr 1fr 1.5fr; gap: 16px; padding: 16px 20px; background: rgba(255,255,255,.02); font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); }
+        .tx-row { display: grid; grid-template-columns: 3fr 3fr 1.5fr 1fr 1.5fr; gap: 16px; padding: 14px 20px; border-bottom: 1px solid rgba(255,255,255,.04); align-items: center; font-size: 12px; }
         .tx-row:last-child { border-bottom: 0; }
         .tx-row:hover { background: rgba(182,255,0,.02); }
-        .tx-addr { display: flex; align-items: center; gap: 8px; font-family: monospace; color: var(--text); cursor: pointer; }
+        
+        .tx-addr { display: flex; align-items: center; gap: 8px; font-family: monospace; color: var(--text); cursor: pointer; min-width: 0; }
         .tx-addr:hover { color: var(--lime); }
+        .tx-full-addr { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+        
         .tx-amount { color: var(--lime); font-weight: 600; }
         .tx-pagination { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; font-size: 12px; color: var(--dim); }
         .tx-nav { display: flex; gap: 8px; }
@@ -124,6 +141,21 @@ export default function TransactionsView({ caseId, toast }) {
           </button>
         </form>
 
+        {/* Search Results Banner */}
+        {searchQuery && !loading && (
+          <div className="tx-banner">
+            <span className="tx-banner-label">Showing transactions for:</span>
+            <span className="tx-banner-addr">{searchQuery}</span>
+            <button 
+              onClick={() => copyToClipboard(searchQuery)} 
+              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--dim)' }}
+              title="Copy Address"
+            >
+              <Copy size={14} />
+            </button>
+          </div>
+        )}
+
         {/* Transactions Table */}
         <div className="tx-table">
           {loading ? (
@@ -143,23 +175,8 @@ export default function TransactionsView({ caseId, toast }) {
               </div>
               {transactions.map((tx, i) => (
                 <div className="tx-row" key={i}>
-                  <div
-                    className="tx-addr"
-                    onClick={() => copyToClipboard(tx.from)}
-                    title={tx.from}
-                  >
-                    {shortAddr(tx.from)}
-                    <Copy size={12} color="var(--dim)" />
-                  </div>
-                  <div
-                    className="tx-addr"
-                    onClick={() => copyToClipboard(tx.to)}
-                    title={tx.to}
-                  >
-                    {shortAddr(tx.to)}
-                    <Copy size={12} color="var(--dim)" />
-                  </div>
-                  {/* Safely format amount to avoid crashes if null/undefined */}
+                  {renderAddress(tx.from)}
+                  {renderAddress(tx.to)}
                   <div className="tx-amount">
                     {Number(tx.amount || 0).toFixed(4)}
                   </div>
