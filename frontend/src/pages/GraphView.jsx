@@ -6,7 +6,7 @@ import React, {
   useMemo,
 } from "react";
 import * as d3 from "d3";
-import { Search, Loader } from "lucide-react"; // Added icons
+import { Search } from "lucide-react"; // Added Search icon
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
@@ -58,16 +58,13 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
   const [selected, setSelected] = useState(null);
   const [nodes, setNodes] = useState([]);
   const [links, setLinks] = useState([]);
-  const [loading, setLoading] = useState(false); // Changed to false initially
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [hoveredNode, setHoveredNode] = useState(null);
   const [copied, setCopied] = useState(false);
   const [zoomTransform, setZoomTransform] = useState(d3.zoomIdentity);
-  const [analyzing, setAnalyzing] = useState(false);
-
-  // New states for search workflow
-  const [searchInput, setSearchInput] = useState("");
-  const [hasSearched, setHasSearched] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false); // New state for ML button loading
+  const [searchInput, setSearchInput] = useState(""); // New state for search bar
 
   const stats = useMemo(() => {
     if (!nodes.length)
@@ -100,145 +97,11 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Fetch Graph Data (Modified to support filtering by address)
-  const fetchGraphData = async (searchAddress = null) => {
-    try {
-      setLoading(true);
-      setError("");
-
-      const token = localStorage.getItem("chainsleuth_token");
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
-
-      const url = caseId
-        ? `${API_BASE_URL}/api/graph?case_id=${caseId}`
-        : `${API_BASE_URL}/api/graph`;
-
-      const response = await fetch(url, { headers });
-      const data = await response.json();
-
-      if (response.ok) {
-        const rawNodes = data.nodes || [];
-        const rawLinks = data.links || [];
-
-        if (rawNodes.length === 0) {
-          setNodes([]);
-          setLinks([]);
-          return;
-        }
-
-        const enrichedNodes = rawNodes.map((n) => ({
-          ...n,
-          score: n.score || 0,
-          patterns: n.patterns || [],
-          flags: n.flags || [],
-          risk: n.risk || scoreToRiskLevel(n.score || 0),
-          txCount: n.txCount || 0,
-        }));
-
-        const validNodeIds = new Set(enrichedNodes.map((n) => n.id));
-        const safeLinks = rawLinks.filter(
-          (l) => validNodeIds.has(l[0]) && validNodeIds.has(l[1]),
-        );
-
-        let finalNodes = enrichedNodes;
-        let finalLinks = safeLinks;
-
-        // If an address was searched, filter the graph to only show that node and its immediate neighbors
-        if (searchAddress) {
-          const validNodeIds = new Set([searchAddress]);
-          safeLinks.forEach(link => {
-            if (link[0] === searchAddress) validNodeIds.add(link[1]);
-            if (link[1] === searchAddress) validNodeIds.add(link[0]);
-          });
-
-          finalNodes = enrichedNodes.filter((n) => validNodeIds.has(n.id));
-          finalLinks = safeLinks.filter(
-            (l) => validNodeIds.has(l[0]) && validNodeIds.has(l[1])
-          );
-        }
-
-        const simNodes = finalNodes.map((n, i) => ({
-          ...n,
-          x: Math.sin(i * 0.5) * 400 + (Math.random() - 0.5) * 300,
-          y: Math.cos(i * 0.7) * 400 + (Math.random() - 0.5) * 300,
-        }));
-        const simLinks = finalLinks.map((l) => ({
-          source: l[0],
-          target: l[1],
-        }));
-
-        const simulation = d3
-          .forceSimulation(simNodes)
-          .force(
-            "link",
-            d3
-              .forceLink(simLinks)
-              .id((d) => d.id)
-              .distance(120)
-              .strength(0.2),
-          )
-          .force("charge", d3.forceManyBody().strength(-450).distanceMax(800))
-          .force("x", d3.forceX(0).strength(0.01))
-          .force("y", d3.forceY(0).strength(0.01))
-          .force("collide", d3.forceCollide(24))
-          .alphaTarget(0)
-          .stop();
-
-        for (let i = 0; i < 800; ++i) simulation.tick();
-
-        const [xMin, xMax] = d3.extent(simNodes, (d) => d.x);
-        const [yMin, yMax] = d3.extent(simNodes, (d) => d.y);
-
-        const xScale = d3
-          .scaleLinear()
-          .domain([xMin || -1, xMax || 1])
-          .range([0.08, 0.92]);
-        const yScale = d3
-          .scaleLinear()
-          .domain([yMin || -1, yMax || 1])
-          .range([0.08, 0.92]);
-
-        simNodes.forEach((n) => {
-          n.x = xScale(n.x);
-          n.y = yScale(n.y);
-        });
-
-        setNodes(simNodes);
-        setLinks(finalLinks);
-
-        // Auto-select the searched node if it exists
-        const searchedNode = simNodes.find((n) => n.id === searchAddress);
-        if (searchedNode) {
-          setSelected(searchedNode);
-        } else if (simNodes.length > 0) {
-          setSelected(simNodes[0]);
-        }
-      } else {
-        if (response.status === 401) {
-          toast && toast("Authentication expired. Please log in again.");
-        }
-        setError(data.error || "Failed to fetch graph data");
-      }
-    } catch (err) {
-      setError("Connection error - backend not available");
-      setNodes([]);
-      setLinks([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Trigger ML Pipeline from the UI
   const handleDeepAnalysis = async (walletId) => {
-    if (!walletId) {
-      toast && toast("Please enter a wallet address.");
-      return;
-    }
-
     try {
       setAnalyzing(true);
       setError("");
-      setHasSearched(true);
 
       const token = localStorage.getItem("chainsleuth_token");
       const headers = {
@@ -246,6 +109,7 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
       };
       if (token) headers.Authorization = `Bearer ${token}`;
 
+      // Updated to use the correct POST endpoint matching WalletsView.jsx
       const response = await fetch(`${API_BASE_URL}/api/wallets/analyze`, {
         method: "POST",
         headers,
@@ -254,25 +118,30 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
       const data = await response.json();
 
       if (response.ok) {
-        toast && toast(`Analysis complete. Risk Score: ${data.riskScore}`);
-        
-        // Fetch the graph data and filter it for the analyzed wallet
-        await fetchGraphData(walletId);
-
-        // If we already have a selected node, update it with the ML data
         const updatedNodeData = {
           score: data.riskScore,
           risk: (data.riskLevel || "low").toLowerCase(),
           txCount: data.transactionCount,
+          // Safely extract string flag names from the backend array of objects
           flags: (data.flags || []).map((f) => f.type || f),
           patterns: data.patterns || [],
         };
 
+        // Update nodes array to trigger D3 re-render (changes node color immediately)
+        setNodes((prevNodes) =>
+          prevNodes.map((n) =>
+            n.id === walletId ? { ...n, ...updatedNodeData } : n,
+          ),
+        );
+
+        // Update selected node to instantly reflect changes in the details panel
         setSelected((prevSelected) =>
           prevSelected && prevSelected.id === walletId
             ? { ...prevSelected, ...updatedNodeData }
             : prevSelected,
         );
+        
+        toast && toast(`Analysis complete. Risk Score: ${data.riskScore}`);
       } else {
         if (response.status === 401) {
           toast && toast("Authentication expired. Please log in again.");
@@ -288,6 +157,140 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
       setAnalyzing(false);
     }
   };
+
+  // New handleSearch function to trigger analysis and re-fetch graph
+  const handleSearch = async (e) => {
+    e.preventDefault();
+    const address = searchInput.trim();
+    if (!address) {
+      toast && toast("Please enter a wallet address.");
+      return;
+    }
+
+    // Run the deep analysis on the searched address
+    await handleDeepAnalysis(address);
+
+    // Re-fetch the graph data to show the new wallet and its connections
+    fetchGraphData();
+  };
+
+  useEffect(() => {
+    const fetchGraphData = async () => {
+      try {
+        setLoading(true);
+        setError("");
+
+        const token = localStorage.getItem("chainsleuth_token");
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+        const url = caseId
+          ? `${API_BASE_URL}/api/graph?case_id=${caseId}`
+          : `${API_BASE_URL}/api/graph`;
+
+        const response = await fetch(url, { headers });
+        const data = await response.json();
+
+        if (response.ok) {
+          const rawNodes = data.nodes || [];
+          const rawLinks = data.links || [];
+
+          if (rawNodes.length === 0) {
+            setNodes([]);
+            setLinks([]);
+            return;
+          }
+
+          const enrichedNodes = rawNodes.map((n) => ({
+            ...n,
+            score: n.score || 0,
+            patterns: n.patterns || [],
+            flags: n.flags || [],
+            risk: n.risk || scoreToRiskLevel(n.score || 0),
+            txCount: n.txCount || 0,
+          }));
+
+          const validNodeIds = new Set(enrichedNodes.map((n) => n.id));
+          const safeLinks = rawLinks.filter(
+            (l) => validNodeIds.has(l[0]) && validNodeIds.has(l[1]),
+          );
+
+          const simNodes = enrichedNodes.map((n, i) => ({
+            ...n,
+            x: Math.sin(i * 0.5) * 400 + (Math.random() - 0.5) * 300,
+            y: Math.cos(i * 0.7) * 400 + (Math.random() - 0.5) * 300,
+          }));
+          const simLinks = safeLinks.map((l) => ({
+            source: l[0],
+            target: l[1],
+          }));
+
+          const simulation = d3
+            .forceSimulation(simNodes)
+            .force(
+              "link",
+              d3
+                .forceLink(simLinks)
+                .id((d) => d.id)
+                .distance(120)
+                .strength(0.2),
+            )
+            .force("charge", d3.forceManyBody().strength(-450).distanceMax(800))
+            .force("x", d3.forceX(0).strength(0.01))
+            .force("y", d3.forceY(0).strength(0.01))
+            .force("collide", d3.forceCollide(24))
+            .alphaTarget(0)
+            .stop();
+
+          for (let i = 0; i < 800; ++i) simulation.tick();
+
+          const [xMin, xMax] = d3.extent(simNodes, (d) => d.x);
+          const [yMin, yMax] = d3.extent(simNodes, (d) => d.y);
+
+          const xScale = d3
+            .scaleLinear()
+            .domain([xMin || -1, xMax || 1])
+            .range([0.08, 0.92]);
+          const yScale = d3
+            .scaleLinear()
+            .domain([yMin || -1, yMax || 1])
+            .range([0.08, 0.92]);
+
+          simNodes.forEach((n) => {
+            n.x = xScale(n.x);
+            n.y = yScale(n.y);
+          });
+
+          setNodes(simNodes);
+          setLinks(safeLinks);
+          
+          // If a search was performed, auto-select that node to populate the right panel
+          if (searchInput) {
+            const searchedNode = simNodes.find((n) => n.id === searchInput);
+            if (searchedNode) {
+              setSelected(searchedNode);
+            } else if (simNodes.length > 0 && !selected) {
+              setSelected(simNodes[0]);
+            }
+          } else if (simNodes.length > 0 && !selected) {
+            setSelected(simNodes[0]);
+          }
+        } else {
+          if (response.status === 401) {
+            toast && toast("Authentication expired. Please log in again.");
+          }
+          setError(data.error || "Failed to fetch graph data");
+        }
+      } catch (err) {
+        setError("Connection error - backend not available");
+        setNodes([]);
+        setLinks([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchGraphData();
+  }, [caseId, refreshTrigger, toast]);
 
   useEffect(() => {
     const svgEl = svgRef.current;
@@ -460,84 +463,18 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
     };
   }, [draw]);
 
-  // EMPTY STATE WITH SEARCH BAR
-  if (!hasSearched && !loading && !analyzing && nodes.length === 0) {
+  if (error)
+    return <div style={{ padding: 24, color: "#ff5c67" }}>⚠️ {error}</div>;
+  if (loading)
     return (
-      <div style={{ padding: 24, display: "flex", justifyContent: "center", alignItems: "center", minHeight: "60vh" }}>
-        <div style={{ maxWidth: 600, width: "100%", textAlign: "center" }}>
-          <h2 style={{ fontSize: 24, fontWeight: 800, color: "#f2f5f3", marginBottom: 8 }}>
-            Blockchain Graph Explorer
-          </h2>
-          <p style={{ color: "var(--muted)", fontSize: 14, marginBottom: 24 }}>
-            Enter a wallet address to run a deep ML analysis and visualize its transaction network.
-          </p>
-          <form onSubmit={(e) => { e.preventDefault(); handleDeepAnalysis(searchInput.trim()); }} style={{ display: "flex", gap: 12 }}>
-            <input
-              type="text"
-              placeholder="Enter wallet address (0x...)"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              style={{
-                flex: 1,
-                background: "var(--card)",
-                border: "1px solid var(--line)",
-                borderRadius: 10,
-                padding: "14px 16px",
-                color: "#fff",
-                fontSize: 13,
-                outline: "none",
-                fontFamily: "monospace",
-              }}
-            />
-            <button
-              type="submit"
-              style={{
-                background: "var(--lime)",
-                color: "#081000",
-                border: 0,
-                borderRadius: 10,
-                padding: "14px 24px",
-                fontWeight: 700,
-                cursor: "pointer",
-                fontSize: 13,
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-              }}
-            >
-              <Search size={14} /> Analyze & Visualize
-            </button>
-          </form>
-        </div>
+      <div style={{ padding: 24, color: "#626c70" }}>
+        Loading blockchain graph...
       </div>
     );
-  }
-
-  if (loading || analyzing)
-    return (
-      <div style={{ padding: 24, color: "#626c70", display: "flex", alignItems: "center", gap: 12 }}>
-        <Loader size={18} className="animate-spin" />
-        {analyzing ? "Running ML Deep Analysis..." : "Loading blockchain graph..."}
-      </div>
-    );
-
-  if (error && nodes.length === 0)
-    return (
-      <div style={{ padding: 24 }}>
-        <div style={{ color: "#ff5c67", marginBottom: 16 }}>⚠️ {error}</div>
-        <button onClick={() => { setHasSearched(false); setSearchInput(""); setNodes([]); }} style={{ background: "var(--card)", border: "1px solid var(--line)", color: "var(--lime)", padding: "10px 16px", borderRadius: 8, cursor: "pointer" }}>
-          Try Another Address
-        </button>
-      </div>
-    );
-
   if (nodes.length === 0)
     return (
-      <div style={{ padding: 24 }}>
-        <div style={{ color: "#626c70", marginBottom: 16 }}>No network data found for this address. Try analyzing a different wallet.</div>
-        <button onClick={() => { setHasSearched(false); setSearchInput(""); setNodes([]); }} style={{ background: "var(--card)", border: "1px solid var(--line)", color: "var(--lime)", padding: "10px 16px", borderRadius: 8, cursor: "pointer" }}>
-          Search Again
-        </button>
+      <div style={{ padding: 24, color: "#626c70" }}>
+        No network data found. Try analyzing a wallet first.
       </div>
     );
 
@@ -546,8 +483,8 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
       className="cx-scale"
       style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}
     >
-      {/* SEARCH BAR AT TOP */}
-      <form onSubmit={(e) => { e.preventDefault(); handleDeepAnalysis(searchInput.trim()); }} style={{ display: "flex", gap: 12, marginBottom: 8 }}>
+      {/* SEARCH BAR ADDED HERE */}
+      <form onSubmit={handleSearch} style={{ display: "flex", gap: 12, marginBottom: 8 }}>
         <input
           type="text"
           placeholder="Enter wallet address to analyze (0x...)"
@@ -583,12 +520,10 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
             whiteSpace: "nowrap",
           }}
         >
-          {analyzing ? <Loader size={14} className="animate-spin" /> : <Search size={14} />}
+          <Search size={14} />
           {analyzing ? "Analyzing..." : "Analyze & Visualize"}
         </button>
       </form>
-
-      {error && <div style={{ padding: 12, color: "#ff5c67", background: "rgba(255,92,103,0.1)", borderRadius: 8 }}>⚠️ {error}</div>}
 
       {/* 1. TOP STAT SUMMARY CARDS */}
       <div
@@ -844,7 +779,7 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
                   opacity: analyzing ? 0.7 : 1,
                 }}
               >
-                {analyzing ? "RUNNING ML ANALYSIS..." : "RE-RUN ML DEEP ANALYSIS"}
+                {analyzing ? "RUNNING ML ANALYSIS..." : "RUN ML DEEP ANALYSIS"}
               </button>
 
               {/* Risk Score Gauge */}
