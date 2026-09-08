@@ -6,7 +6,6 @@ import uuid
 from datetime import datetime
 from dotenv import load_dotenv
 import requests
-from web3 import Web3
 from fraud_detection import calculate_suspicion_score
 from flask_cors import CORS
 import logging
@@ -87,7 +86,7 @@ def fetch_ethereum_transactions(wallet_address):
     
     try:
         url = f"https://api.etherscan.io/api?module=account&action=txlist&address={wallet_address}&startblock=0&endblock=99999999&apikey={ETHERSCAN_API_KEY}"
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=15)
         data = response.json()
         
         if data.get('status') == '1' and len(data.get('result', [])) > 0:
@@ -148,43 +147,70 @@ def extract_features_from_transactions(transactions):
         return [0] * 166
 
 def add_wallet_to_db(address, blockchain, transactions):
+    """Safely extract data and save the main wallet to Neo4j"""
+    timestamps = []
+    for tx in transactions:
+        try:
+            timestamps.append(int(tx.get("timeStamp", 0)))
+        except:
+            timestamps.append(0)
+            
+    total_volume = 0.0
+    for tx in transactions:
+        try:
+            total_volume += float(tx.get("value", 0)) / 1e18
+        except:
+            pass
+            
     query = """
     MERGE (w:Wallet {address: $address, blockchain: $blockchain}) 
     SET w.first_seen = $first_seen, w.last_seen = $last_seen, 
         w.transaction_count = $tx_count, w.total_volume = $total_volume 
     RETURN w
     """
-    timestamps = [int(tx.get("timeStamp", 0)) for tx in transactions]
     params = {
-        "address": address, 
+        "address": address.lower(), 
         "blockchain": blockchain, 
         "first_seen": min(timestamps) if timestamps else 0, 
         "last_seen": max(timestamps) if timestamps else 0, 
         "tx_count": len(transactions), 
-        "total_volume": sum(float(tx.get("value", 0)) for tx in transactions) / 1e18
+        "total_volume": total_volume
     }
     return neo4j_conn.query(query, params)
 
 def add_transactions_to_db(source_address, blockchain, transactions):
+    """Batch write all transactions to Neo4j using UNWIND for high speed"""
+    tx_data = []
     for tx in transactions:
         to_address = tx.get("to")
-        if not to_address: continue
-        query = """
-        MATCH (from:Wallet {address: $from_addr}) 
-        MERGE (to:Wallet {address: $to_addr, blockchain: $blockchain}) 
-        MERGE (from)-[r:SENT_TO]->(to) 
-        SET r.amount = coalesce(r.amount, 0) + $amount, 
-            r.last_transaction = $timestamp, 
-            r.transaction_count = coalesce(r.transaction_count, 0) + 1 
-        RETURN r
-        """
-        neo4j_conn.query(query, {
-            "from_addr": source_address, 
-            "to_addr": to_address, 
-            "blockchain": blockchain, 
-            "amount": float(tx.get("value", 0)) / 1e18, 
-            "timestamp": int(tx.get("timeStamp", 0))
-        })
+        if not to_address: 
+            continue
+        try:
+            tx_data.append({
+                "to_addr": to_address.lower(), 
+                "amount": float(tx.get("value", 0)) / 1e18, 
+                "timestamp": int(tx.get("timeStamp", 0))
+            })
+        except Exception:
+            continue # Skip malformed transactions
+            
+    if not tx_data:
+        return
+        
+    query = """
+    MATCH (from:Wallet {address: $from_addr})
+    UNWIND $tx_data AS row
+    MERGE (to:Wallet {address: row.to_addr, blockchain: $blockchain})
+    MERGE (from)-[r:SENT_TO]->(to)
+    SET r.amount = coalesce(r.amount, 0) + row.amount,
+        r.last_transaction = CASE WHEN r.last_transaction IS NULL OR row.timestamp > r.last_transaction THEN row.timestamp ELSE r.last_transaction END,
+        r.transaction_count = coalesce(r.transaction_count, 0) + 1
+    """
+    neo4j_conn.query(query, {
+        "from_addr": source_address.lower(), 
+        "blockchain": blockchain, 
+        "tx_data": tx_data
+    })
 
 # ===================== HEALTH & AUTHENTICATION =====================
 
@@ -203,7 +229,6 @@ def login():
         if not email or not password:
             return jsonify({"error": "Email and password required"}), 400
         
-        # Authenticate against Neo4j
         query = "MATCH (u:User {email: $email, password: $password}) RETURN u.email as email, u.name as name, u.role as role"
         result = neo4j_conn.query(query, {"email": email, "password": password})
         
@@ -286,7 +311,7 @@ def analyze_wallet():
         patterns = []
         flags = []
         
-        if "HIGH_RECIPIENT_DIVERSITY" in fraud_data.get("flags", []):
+        if "HIGH_RECIPIENT_DIVERSITY" in fraud_data.get("flags", []) or "FUND_SPLITTING" in fraud_data.get("flags", []):
             patterns.append({"name": "Fund Splitting", "risk": "HIGH", "confidence": 0.85})
             flags.append({"type": "FUND_SPLITTING", "message": "Funds distributed across multiple wallets"})
         
@@ -296,12 +321,12 @@ def analyze_wallet():
         if "RAPID_PASS_THROUGH" in fraud_data.get("flags", []):
             patterns.append({"name": "Rapid Pass-Through", "risk": "HIGH", "confidence": 0.88})
         
-        # 3. Save to Neo4j
+        # 3. Save to Neo4j (Batch save to prevent Render timeouts)
         try:
             add_wallet_to_db(address, blockchain, transactions)
             add_transactions_to_db(address, blockchain, transactions)
         except Exception as db_err:
-            logger.warning(f"DB error (non-critical): {db_err}")
+            logger.warning(f"DB save error (non-critical): {db_err}")
         
         # 4. Extract Linked Wallets for UI
         linked_wallets = []
@@ -344,7 +369,7 @@ def get_wallet_connections(address):
                r.transaction_count as num_transactions, r.last_transaction as last_transaction 
         ORDER BY r.amount DESC
         """
-        result = neo4j_conn.query(query, {"address": address})
+        result = neo4j_conn.query(query, {"address": address.lower()})
         return jsonify({"from_address": address, "connected_wallets": result, "total_connections": len(result)}), 200
     except Exception as e:
         return handle_db_error(e)
@@ -365,7 +390,7 @@ def add_global_wallet():
         addr = request.json.get("address")
         chain = "Bitcoin" if str(addr).startswith(("bc1", "1", "3")) else "Ethereum"
         query = "MERGE (w:Wallet {address: $address}) ON CREATE SET w.blockchain = $blockchain, w.risk = 'medium', w.score = 55, w.transaction_count = 0, w.last_seen = 'Just added' RETURN w.address as addr, w.blockchain as chain, w.risk as risk, w.score as score, w.last_seen as lastActivity, w.transaction_count as txCount"
-        res = neo4j_conn.query(query, {"address": addr, "blockchain": chain})
+        res = neo4j_conn.query(query, {"address": addr.lower(), "blockchain": chain})
         return jsonify({"status": "success", "wallet": res[0]}), 201
     except Exception as e:
         return handle_db_error(e)
@@ -418,7 +443,7 @@ def add_case_wallet(case_id):
         addr = request.json.get("address")
         chain = "Bitcoin" if str(addr).startswith(("bc1", "1", "3")) else "Ethereum"
         query = "MATCH (c:Case {id: $case_id}) MERGE (w:Wallet {address: $address}) ON CREATE SET w.blockchain = $blockchain, w.risk = 'medium', w.score = 55, w.transaction_count = 0, w.last_seen = 'Just added' MERGE (c)-[:TRACKS]->(w) RETURN w.address as addr, w.blockchain as chain, w.risk as risk, w.score as score, w.last_seen as lastActivity, w.transaction_count as txCount"
-        res = neo4j_conn.query(query, {"case_id": case_id, "address": addr, "blockchain": chain})
+        res = neo4j_conn.query(query, {"case_id": case_id, "address": addr.lower(), "blockchain": chain})
         return jsonify({"status": "success", "wallet": res[0]}), 201
     except Exception as e:
         return handle_db_error(e)
@@ -460,7 +485,8 @@ def get_transactions():
 @app.route('/api/transactions/search', methods=['GET'])
 def search_transactions():
     try:
-        address = request.args.get("address", "").strip()
+        # Frontend uses 'q', but we also check 'address' for backward compatibility
+        address = request.args.get("q", "").strip() or request.args.get("address", "").strip()
         if not address: return jsonify({"error": "Address required"}), 400
         
         query = """
@@ -473,7 +499,7 @@ def search_transactions():
             r.transaction_count as count
         ORDER BY r.last_transaction DESC
         """
-        result = neo4j_conn.query(query, {"address": address})
+        result = neo4j_conn.query(query, {"address": address.lower()})
         
         transactions = [
             {"from": tx['from_address'], "to": tx['to_address'], "amount": float(tx['amount'] or 0), "timestamp": tx['timestamp'], "count": tx['count'] or 1}
