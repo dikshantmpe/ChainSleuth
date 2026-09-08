@@ -5,10 +5,15 @@ const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
 
 export default function SettingsView({ toast, user }) {
-  // Initialize state from the user prop passed down from App.jsx
-  const [name, setName] = useState(user?.name || "");
-  const [email] = useState(user?.email || "");
-  const [role] = useState(user?.role || "investigator");
+  // Fallback to localStorage if user prop is missing or incomplete
+  const storedUser = !user || !user.email 
+    ? JSON.parse(localStorage.getItem("chainsleuth_user") || '{}') 
+    : user;
+
+  // Initialize state from the user prop or localStorage
+  const [name, setName] = useState(storedUser?.name || "");
+  const [email] = useState(storedUser?.email || "");
+  const [role] = useState(storedUser?.role || "investigator");
 
   const [newPassword, setNewPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -20,9 +25,15 @@ export default function SettingsView({ toast, user }) {
     setError("");
 
     try {
+      const token = localStorage.getItem("chainsleuth_token");
+      const headers = {
+        "Content-Type": "application/json",
+      };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
       const res = await fetch(`${API_BASE_URL}/api/user/update`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ email, name, newPassword }),
       });
       const data = await res.json();
@@ -38,7 +49,11 @@ export default function SettingsView({ toast, user }) {
 
         if (toast) toast("Profile updated successfully");
       } else {
-        setError(data.error || "Failed to update profile");
+        if (res.status === 401) {
+          setError("Authentication expired. Please log in again.");
+        } else {
+          setError(data.error || "Failed to update profile");
+        }
       }
     } catch (err) {
       setError("Connection error - backend not available.");
