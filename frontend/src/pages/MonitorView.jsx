@@ -3,14 +3,24 @@ import React, { useState, useEffect } from "react";
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
 
-export default function MonitorView() {
+export default function MonitorView({ toast }) {
   const [feed, setFeed] = useState([]);
   const [isPolling, setIsPolling] = useState(true);
 
   useEffect(() => {
     const fetchLiveAlerts = async () => {
       try {
-        const res = await fetch(`${API_BASE_URL}/api/dashboard/alerts`);
+        const token = localStorage.getItem("chainsleuth_token");
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+        const res = await fetch(`${API_BASE_URL}/api/dashboard/alerts`, { headers });
+        
+        if (res.status === 401) {
+          if (toast) toast("Authentication expired. Please log in again.");
+          setIsPolling(false); // Stop polling if auth fails
+          return;
+        }
+
         if (res.ok) {
           const data = await res.json();
 
@@ -55,7 +65,7 @@ export default function MonitorView() {
     }, 8000);
 
     return () => clearInterval(interval);
-  }, [isPolling]);
+  }, [isPolling, toast]);
 
   return (
     <div className="cx-fade" style={{ padding: 24 }}>
@@ -86,7 +96,7 @@ export default function MonitorView() {
               animation: "pulse 2s infinite",
             }}
           />
-          Live feed — connected to port 5001
+          {isPolling ? "Live feed — connected to port 5001" : "Feed Paused"}
         </div>
         <button
           onClick={() => setIsPolling(!isPolling)}
