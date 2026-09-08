@@ -48,24 +48,24 @@ export default function ReportsView({ toast }) {
     fetchCasesForReports();
   }, []);
 
-  // Native JavaScript file generation and download
+  // Generate report using existing /wallets endpoint instead of /export-data
   const handleDownload = async (report) => {
     setDownloadingId(report.id);
     try {
       const token = localStorage.getItem("chainsleuth_token");
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
+      // Fetch wallets for this specific case
       const res = await fetch(
-        `${API_BASE_URL}/api/cases/${report.case}/export-data`,
+        `${API_BASE_URL}/api/cases/${report.case}/wallets`,
         { headers }
       );
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error || "Failed to fetch export data");
+        throw new Error(data.error || "Failed to fetch case wallets");
       }
 
-      const c = data.case || {};
       const wallets = data.wallets || [];
 
       let content = `
@@ -73,15 +73,15 @@ export default function ReportsView({ toast }) {
            CHAINSLEUTH FORENSIC REPORT
 ======================================================
 
-CASE ID:        ${c.id || "N/A"}
-TITLE:          ${c.title || "N/A"}
-PREPARED BY:    ${c.investigator || "N/A"}
-DATE OPENED:    ${c.date_opened || "N/A"}
+CASE ID:        ${report.case}
+TITLE:          ${report.title}
+PREPARED BY:    ${report.investigator}
+DATE OPENED:    ${report.generated}
 
 ------------------------------------------------------
 INVESTIGATION SUMMARY:
 This document serves as the official forensic export 
-for case ${c.id || "N/A"}. A total of ${wallets.length} wallets 
+for case ${report.case}. A total of ${wallets.length} wallets 
 were tracked and analyzed using the ChainSleuth ML engine.
 
 ------------------------------------------------------
@@ -96,15 +96,23 @@ SUBJECT WALLETS & AI RISK ASSESSMENT:
           const vol = Number(w.total_volume || 0).toFixed(4);
           
           content += `\n[${i + 1}] WALLET: ${w.address}\n`;
-          content += `    Risk Score: ${w.score || 0}/100 (${(w.level || "low").toUpperCase()})\n`;
-          content += `    Transactions Recorded: ${w.tx_count || 0}\n`;
+          content += `    Risk Score: ${w.score || 0}/100 (${(w.risk || w.level || "low").toUpperCase()})\n`;
+          content += `    Transactions Recorded: ${w.tx_count || w.txCount || 0}\n`;
           content += `    Total Volume Moved: ${vol} ETH\n`;
 
           if (w.patterns && w.patterns.length > 0) {
             content += `    ML Detected Patterns:\n`;
             w.patterns.forEach((p) => {
               const conf = ((p.confidence || 0) * 100).toFixed(0);
-              content += `      - ${p.name || "Pattern"} (Risk: ${p.risk || "N/A"}, Confidence: ${conf}%)\n`;
+              const pName = typeof p === "string" ? p : (p.name || "Pattern");
+              const pRisk = typeof p === "object" ? (p.risk || "N/A") : "N/A";
+              content += `      - ${pName} (Risk: ${pRisk}, Confidence: ${conf}%)\n`;
+            });
+          } else if (w.flags && w.flags.length > 0) {
+            content += `    ML Detected Flags:\n`;
+            w.flags.forEach((f) => {
+              const fStr = typeof f === "string" ? f : (f.type || "Flag");
+              content += `      - ${fStr.replace(/_/g, " ")}\n`;
             });
           } else {
             content += `    ML Detected Patterns: None (Unanalyzed)\n`;
