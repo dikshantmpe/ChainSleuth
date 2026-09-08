@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { BrainCircuit, Activity } from "lucide-react";
+import { BrainCircuit, Activity, Loader } from "lucide-react";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
 
-export default function AIView({ caseId }) {
+export default function AIView({ caseId, toast }) {
   const [address, setAddress] = useState("");
   const [patterns, setPatterns] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -15,18 +15,24 @@ export default function AIView({ caseId }) {
       const fetchCaseAI = async () => {
         setLoading(true);
         try {
+          const token = localStorage.getItem("chainsleuth_token");
+          const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
           const res = await fetch(
             `${API_BASE_URL}/api/cases/${caseId}/patterns`,
+            { headers }
           );
           if (res.ok) {
             const data = await res.json();
             const mappedPatterns = (data.patterns || []).map((p) => ({
               badge: p.risk || "MEDIUM",
               title: p.name || "Pattern Detected",
-              desc: `Detected on wallet ${p.wallet ? p.wallet.slice(0, 8) + "..." : "unknown"}. Algorithmic confidence: ${(p.confidence * 100).toFixed(0)}%.`,
-              contribution: `${p.confidence * 100}%`,
+              desc: `Detected on wallet ${p.wallet ? p.wallet.slice(0, 8) + "..." : "unknown"}. Algorithmic confidence: ${((p.confidence || 0) * 100).toFixed(0)}%.`,
+              contribution: `${((p.confidence || 0) * 100).toFixed(0)}%`,
             }));
             setPatterns(mappedPatterns);
+          } else if (res.status === 401) {
+            toast && toast("Authentication expired. Please log in again.");
           }
         } catch (err) {
           console.error("Failed to load case patterns:", err);
@@ -36,7 +42,7 @@ export default function AIView({ caseId }) {
       };
       fetchCaseAI();
     }
-  }, [caseId]);
+  }, [caseId, toast]);
 
   const handleAnalyze = async (e) => {
     e.preventDefault();
@@ -47,28 +53,60 @@ export default function AIView({ caseId }) {
     setPatterns([]);
 
     try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/wallet/fraud-score?address=${address.trim()}`,
-      );
+      const token = localStorage.getItem("chainsleuth_token");
+      const headers = {
+        "Content-Type": "application/json",
+      };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      // Updated to use the correct POST endpoint matching WalletsView.jsx
+      const res = await fetch(`${API_BASE_URL}/api/wallets/analyze`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ address: address.trim() }),
+      });
       const data = await res.json();
 
       if (res.ok) {
-        // Map backend response directly to UI card structure
-        const generatedPatterns = (data.patterns || []).map((p) => ({
-          badge: p.risk || "UNKNOWN",
-          title: p.name || "Unnamed Pattern",
-          desc: `Algorithmic confidence: ${(p.confidence * 100).toFixed(0)}%. This wallet has been flagged for this behavior by the ML pipeline.`,
-          contribution: `${(p.confidence * 100).toFixed(0)}%`,
-        }));
+        toast && toast(`Analysis complete. Risk Score: ${data.riskScore}`);
+        
+        const generatedPatterns = [];
+
+        // 1. Map ML flags to UI cards
+        (data.flags || []).forEach((flag, idx) => {
+          const flagStr = typeof flag === "string" ? flag : (flag.type || "UNKNOWN");
+          generatedPatterns.push({
+            badge: (data.riskLevel || "MEDIUM").toUpperCase(),
+            title: flagStr.replace(/_/g, " "),
+            desc: data.patterns && data.patterns[idx] 
+              ? data.patterns[idx] 
+              : "Algorithmic anomaly detected by the ML pipeline. This behavior contributes to the overall risk score.",
+            contribution: `${Math.round(100 / Math.max(data.flags.length, 1))}%`
+          });
+        });
+
+        // 2. If no flags were returned, fallback to mapping the patterns array
+        if (generatedPatterns.length === 0 && data.patterns) {
+          data.patterns.forEach((p) => {
+            generatedPatterns.push({
+              badge: (data.riskLevel || "MEDIUM").toUpperCase(),
+              title: typeof p === "string" ? p.slice(0, 40) : (p.name || "Pattern"),
+              desc: typeof p === "string" ? p : (p.description || "Detected pattern."),
+              contribution: "N/A"
+            });
+          });
+        }
 
         setPatterns(generatedPatterns);
       } else {
-        setError(
-          data.error || "Analysis failed. Please check the wallet address.",
-        );
+        if (res.status === 401) {
+          toast && toast("Authentication expired. Please log in again.");
+        } else {
+          setError(data.error || "Analysis failed. Please check the wallet address.");
+        }
       }
     } catch (err) {
-      setError("Failed to connect to the AI scoring engine on port 5001.");
+      setError("Failed to connect to the AI scoring engine.");
     } finally {
       setLoading(false);
     }
@@ -82,9 +120,10 @@ export default function AIView({ caseId }) {
           display: "flex",
           gap: 16,
           alignItems: "center",
+          flexWrap: "wrap",
         }}
       >
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 250 }}>
           <h2
             style={{
               margin: "0 0 4px",
@@ -107,10 +146,10 @@ export default function AIView({ caseId }) {
         {!caseId && (
           <form
             onSubmit={handleAnalyze}
-            style={{ display: "flex", gap: 8, width: 420 }}
+            style={{ display: "flex", gap: 8, width: "100%", maxWidth: 420 }}
           >
             <input
-              placeholder="Enter wallet address to analyze..."
+              placeholder="Enter wallet address to analyze (0x...)"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
               style={{
@@ -134,8 +173,12 @@ export default function AIView({ caseId }) {
                 fontSize: 12,
                 borderRadius: 8,
                 whiteSpace: "nowrap",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
               }}
             >
+              {loading ? <Loader size={14} className="animate-spin" /> : null}
               {loading ? "Analyzing..." : "Run AI"}
             </button>
           </form>
@@ -177,10 +220,27 @@ export default function AIView({ caseId }) {
         </div>
       )}
 
+      {loading && patterns.length === 0 && (
+        <div
+          style={{
+            textAlign: "center",
+            padding: 60,
+            color: "var(--lime)",
+            border: "1px dashed var(--line)",
+            borderRadius: 16,
+          }}
+        >
+          <Loader size={32} className="animate-spin" style={{ margin: "0 auto 12px" }} />
+          <div style={{ fontSize: 13 }}>
+            ML Pipeline running...
+          </div>
+        </div>
+      )}
+
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(3,1fr)",
+          gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
           gap: 12,
         }}
       >
