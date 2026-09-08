@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Briefcase, ArrowRight, Clock, Users } from "lucide-react";
+import { Briefcase, ArrowRight, Clock, Users, PlusCircle } from "lucide-react";
 import { riskColor } from "../utils/risk.js";
 
 const API_BASE_URL =
@@ -19,10 +19,17 @@ export default function CasesView({ onOpen, toast }) {
   const fetchCases = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`${API_BASE_URL}/api/cases`);
+      const token = localStorage.getItem("chainsleuth_token");
+      
+      const res = await fetch(`${API_BASE_URL}/api/cases`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      
       if (res.ok) {
         const data = await res.json();
         setCases(data.cases || []);
+      } else if (res.status === 401) {
+        toast && toast("Authentication expired. Please log in again.");
       }
     } catch (err) {
       console.error("Error fetching cases:", err);
@@ -42,9 +49,13 @@ export default function CasesView({ onOpen, toast }) {
     if (!title.trim() || !officer.trim()) return;
 
     try {
+      const token = localStorage.getItem("chainsleuth_token");
       const res = await fetch(`${API_BASE_URL}/api/cases`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
         body: JSON.stringify({
           title: title.trim(),
           investigator: officer.trim(),
@@ -70,16 +81,16 @@ export default function CasesView({ onOpen, toast }) {
   // Pre-fill officer name when opening the form
   const openForm = () => {
     const storedUser = JSON.parse(
-      localStorage.getItem("chainsleuth_user") || "{}",
+      localStorage.getItem("chainsleuth_user") || "{}"
     );
-    setOfficer(storedUser.name || "");
+    setOfficer(storedUser.name || "Investigator");
     setShowForm(true);
   };
 
   return (
     <div className="cx-fade-up" style={{ padding: 24, position: "relative" }}>
       <style>{`
-        .cv-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+        .cv-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:16px; }
         .cv-card{ background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; cursor:pointer; transition:transform .15s, border-color .15s; }
         .cv-card:hover{ border-color:rgba(182,255,0,.35); transform:translateY(-2px); }
         .cv-card .top{ display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
@@ -87,10 +98,10 @@ export default function CasesView({ onOpen, toast }) {
         .cv-title{ font-size:14px; font-weight:700; margin:4px 0 12px; line-height:1.4; }
         .cv-meta{ font-size:11px; color:var(--muted); display:flex; align-items:center; gap:6px; margin-bottom:5px; }
         .cv-foot{ display:flex; justify-content:space-between; align-items:center; margin-top:12px; }
-        .cv-new{ border:1px dashed var(--line); border-radius:16px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--dim); cursor:pointer; min-height:150px; transition:border-color .15s, color .15s; }
+        .cv-new{ border:1px dashed var(--line); border-radius:16px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--dim); cursor:pointer; min-height:160px; transition:border-color .15s, color .15s; }
         .cv-new:hover{ border-color:rgba(182,255,0,.4); color:var(--lime); }
-        .cv-modal-bg{ position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:200; display:flex; align-items:center; justify-content:center; }
-        .cv-modal{ width:min(420px,90%); background:var(--card); border:1px solid rgba(182,255,0,.25); border-radius:18px; padding:24px; }
+        .cv-modal-bg{ position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:200; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(4px); }
+        .cv-modal{ width:min(420px,90%); background:var(--card); border:1px solid rgba(182,255,0,.25); border-radius:18px; padding:24px; box-shadow:0 10px 30px rgba(0,0,0,0.5); }
         .cv-field{ margin-bottom:14px; }
         .cv-field label{ display:block; font-size:11px; color:var(--muted); margin-bottom:7px; }
         .cv-field input, .cv-field select{ width:100%; background:#080b0d; border:1px solid var(--line); border-radius:9px; padding:11px 12px; color:#fff; font-size:13px; outline:none; }
@@ -99,60 +110,64 @@ export default function CasesView({ onOpen, toast }) {
         @media(max-width:900px){ .cv-grid{grid-template-columns:1fr} }
       `}</style>
 
-      <button
-        className="cx-btn cx-btn-primary"
-        style={{
-          marginBottom: 14,
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-        }}
-        onClick={openForm}
-      >
-        + New Case
-      </button>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Active Investigations</h2>
+        <button
+          className="cx-btn cx-btn-primary"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+          onClick={openForm}
+        >
+          <PlusCircle size={16} /> New Case
+        </button>
+      </div>
 
       <div className="cv-grid">
-        <div className="cv-new" onClick={openForm}>
-          <Briefcase size={20} />
-          <span style={{ fontSize: 12.5, fontWeight: 700 }}>
-            Create New Case
-          </span>
-        </div>
-
         {loading ? (
           <div className="cv-loading">Loading live investigations...</div>
         ) : (
-          cases.map((c) => (
-            <div className="cv-card" key={c.id} onClick={() => onOpen(c)}>
-              <div className="top">
-                <span className="cv-id">{c.id}</span>
-                <span
-                  className="cx-badge"
-                  style={{
-                    background: `${riskColor(c.risk || "medium")}22`,
-                    color: riskColor(c.risk || "medium"),
-                  }}
-                >
-                  {c.status}
-                </span>
+          <>
+            {cases.map((c) => (
+              <div className="cv-card" key={c.id} onClick={() => onOpen(c)}>
+                <div className="top">
+                  <span className="cv-id">{c.id}</span>
+                  <span
+                    className="cx-badge"
+                    style={{
+                      background: `${riskColor(c.risk || "medium")}22`,
+                      color: riskColor(c.risk || "medium"),
+                    }}
+                  >
+                    {c.status || "Open"}
+                  </span>
+                </div>
+                <div className="cv-title">{c.title}</div>
+                {/* Note: Mapped to backend keys 'investigator' and 'date_opened' */}
+                <div className="cv-meta">
+                  <Users size={12} /> {c.investigator || "Unassigned"}
+                </div>
+                <div className="cv-meta">
+                  <Clock size={12} /> Opened {c.date_opened || "Unknown"}
+                </div>
+                <div className="cv-foot">
+                  <span style={{ fontSize: 11, color: "var(--dim)" }}>
+                    {c.wallets || 0} wallets tracked
+                  </span>
+                  <ArrowRight size={13} color="var(--dim)" />
+                </div>
               </div>
-              <div className="cv-title">{c.title}</div>
-              {/* Note: Mapped to backend keys 'investigator' and 'date_opened' */}
-              <div className="cv-meta">
-                <Users size={12} /> {c.investigator}
-              </div>
-              <div className="cv-meta">
-                <Clock size={12} /> Opened {c.date_opened}
-              </div>
-              <div className="cv-foot">
-                <span style={{ fontSize: 11, color: "var(--dim)" }}>
-                  {c.wallets || 0} wallets
-                </span>
-                <ArrowRight size={13} color="var(--dim)" />
-              </div>
+            ))}
+
+            <div className="cv-new" onClick={openForm}>
+              <Briefcase size={20} />
+              <span style={{ fontSize: 12.5, fontWeight: 700 }}>
+                Create New Case
+              </span>
             </div>
-          ))
+          </>
         )}
       </div>
 
