@@ -6,7 +6,6 @@ import React, {
   useMemo,
 } from "react";
 import * as d3 from "d3";
-import { Search } from "lucide-react"; // Added Search icon
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
@@ -63,9 +62,9 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
   const [hoveredNode, setHoveredNode] = useState(null);
   const [copied, setCopied] = useState(false);
   const [zoomTransform, setZoomTransform] = useState(d3.zoomIdentity);
-  const [analyzing, setAnalyzing] = useState(false); // New state for ML button loading
+  const [analyzing, setAnalyzing] = useState(false); // State for ML button loading
   
-  // New state for the search bar
+  // State for the search input inside the right panel
   const [searchInput, setSearchInput] = useState("");
 
   const stats = useMemo(() => {
@@ -99,7 +98,14 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Trigger ML Pipeline from the UI (Used by the Search Bar AND the Side Panel Button)
+  // Sync search input if a node is clicked on the graph
+  useEffect(() => {
+    if (selected) {
+      setSearchInput(selected.id);
+    }
+  }, [selected]);
+
+  // Trigger ML Pipeline from the UI
   const handleDeepAnalysis = async (walletId) => {
     if (!walletId) {
       toast && toast("Please enter a wallet address.");
@@ -127,10 +133,10 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
       if (response.ok) {
         toast && toast(`Analysis complete. Risk Score: ${data.riskScore}`);
         
-        // 2. Fetch the Graph Data and Filter it to show only this wallet and its immediate neighbors
+        // 2. Fetch Graph Data and filter for this wallet
         await fetchGraphData(walletId);
 
-        // 3. Update the selected node in the side panel with the fresh ML data
+        // 3. Update the side panel with fresh ML data
         const updatedNodeData = {
           score: data.riskScore,
           risk: (data.riskLevel || "low").toLowerCase(),
@@ -160,7 +166,7 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
     }
   };
 
-  // Handle Submit from the Search Bar
+  // Handle Submit from the Right Panel Form
   const handleSearch = (e) => {
     e.preventDefault();
     handleDeepAnalysis(searchInput.trim());
@@ -202,7 +208,7 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
         }));
 
         const validNodeIds = new Set(enrichedNodes.map((n) => n.id));
-        let safeLinks = rawLinks.filter(
+        const safeLinks = rawLinks.filter(
           (l) => validNodeIds.has(l[0]) && validNodeIds.has(l[1]),
         );
         
@@ -349,7 +355,7 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
       .attr("markerHeight", 5)
       .attr("orient", "auto")
       .append("path")
-      .attr("d", "M0,-5L10,0L0,5")
+      .attr("d", "M0,-5L10,0,L0,5")
       .attr("fill", "rgba(182,255,0,.35)");
 
     const nodeMap = new Map(nodes.map((n) => [n.id, n]));
@@ -473,18 +479,12 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
     };
   }, [draw]);
 
-  if (error)
+  if (error && !loading)
     return <div style={{ padding: 24, color: "#ff5c67" }}>⚠️ {error}</div>;
-  if (loading)
+  if (loading && nodes.length === 0)
     return (
       <div style={{ padding: 24, color: "#626c70" }}>
         Loading blockchain graph...
-      </div>
-    );
-  if (nodes.length === 0)
-    return (
-      <div style={{ padding: 24, color: "#626c70" }}>
-        No network data found. Try analyzing a wallet first.
       </div>
     );
 
@@ -493,48 +493,6 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
       className="cx-scale"
       style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}
     >
-      {/* SEARCH BAR ADDED HERE (Sits perfectly above the stats cards) */}
-      <form onSubmit={handleSearch} style={{ display: "flex", gap: 12, marginBottom: 4 }}>
-        <input
-          type="text"
-          placeholder="Enter wallet address to analyze (0x...)"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          style={{
-            flex: 1,
-            background: "var(--card)",
-            border: "1px solid var(--line)",
-            borderRadius: 10,
-            padding: "12px 14px",
-            color: "#fff",
-            fontSize: 13,
-            outline: "none",
-            fontFamily: "monospace",
-          }}
-        />
-        <button
-          type="submit"
-          disabled={analyzing}
-          style={{
-            background: analyzing ? "#20282b" : "var(--lime)",
-            color: analyzing ? "var(--muted)" : "#081000",
-            border: 0,
-            borderRadius: 10,
-            padding: "12px 20px",
-            fontWeight: 700,
-            cursor: analyzing ? "not-allowed" : "pointer",
-            fontSize: 13,
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            whiteSpace: "nowrap",
-          }}
-        >
-          <Search size={14} />
-          {analyzing ? "Analyzing..." : "Analyze & Visualize"}
-        </button>
-      </form>
-
       {/* 1. TOP STAT SUMMARY CARDS */}
       <div
         style={{
@@ -702,12 +660,21 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
               height: 480,
               background:
                 "radial-gradient(circle at center, rgba(182,255,0,.045), transparent 55%)",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
             }}
           >
-            <svg
-              ref={svgRef}
-              style={{ width: "100%", height: "100%", display: "block" }}
-            />
+            {nodes.length === 0 ? (
+              <span style={{ color: "var(--muted)", fontSize: 13 }}>
+                No network data found. Analyze a wallet to populate the graph.
+              </span>
+            ) : (
+              <svg
+                ref={svgRef}
+                style={{ width: "100%", height: "100%", display: "block" }}
+              />
+            )}
           </div>
         </div>
 
@@ -725,73 +692,116 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
             gap: 16,
           }}
         >
-          {selected ? (
-            <>
-              {/* Wallet Address */}
-              <div>
-                <div
-                  style={{
-                    fontSize: 10,
-                    color: "var(--lime)",
-                    fontWeight: 800,
-                    letterSpacing: ".1em",
-                    marginBottom: 8,
-                  }}
-                >
-                  WALLET ADDRESS
-                </div>
-                <div
-                  style={{
-                    fontFamily: "monospace",
-                    fontSize: 11,
-                    wordBreak: "break-all",
-                    color: "#f2f5f3",
-                    background: "rgba(0,0,0,.2)",
-                    padding: 8,
-                    borderRadius: 6,
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    gap: 8,
-                  }}
-                >
-                  <span>{selected.id}</span>
-                  <button
-                    onClick={() => handleCopy(selected.id)}
-                    style={{
-                      background: "transparent",
-                      border: "none",
-                      color: copied ? "var(--lime)" : "var(--muted)",
-                      cursor: "pointer",
-                      fontSize: 10,
-                      fontWeight: 700,
-                    }}
-                  >
-                    {copied ? "COPIED" : "COPY"}
-                  </button>
-                </div>
-              </div>
-
-              {/* Run ML Analysis Button */}
+          {/* Wallet Address Search & Display (Combined in one card) */}
+          <div>
+            <div
+              style={{
+                fontSize: 10,
+                color: "var(--lime)",
+                fontWeight: 800,
+                letterSpacing: ".1em",
+                marginBottom: 8,
+              }}
+            >
+              WALLET ADDRESS
+            </div>
+            
+            {/* Search Form */}
+            <form onSubmit={handleSearch} style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+              <input
+                type="text"
+                placeholder="Enter address (0x...)"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                style={{
+                  flex: 1,
+                  background: "rgba(0,0,0,.2)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 6,
+                  padding: "10px 12px",
+                  color: "#fff",
+                  fontSize: 11,
+                  outline: "none",
+                  fontFamily: "monospace",
+                }}
+              />
               <button
-                onClick={() => handleDeepAnalysis(selected.id)}
+                type="submit"
                 disabled={analyzing}
                 style={{
-                  padding: "10px 14px",
-                  borderRadius: 8,
                   background: analyzing ? "#20282b" : "var(--lime)",
                   color: analyzing ? "var(--muted)" : "#0a0e10",
-                  border: "none",
+                  border: 0,
+                  borderRadius: 6,
+                  padding: "0 16px",
                   fontWeight: 800,
-                  fontSize: 12,
+                  fontSize: 11,
                   cursor: analyzing ? "not-allowed" : "pointer",
-                  transition: "all 0.2s",
-                  opacity: analyzing ? 0.7 : 1,
+                  whiteSpace: "nowrap",
                 }}
               >
-                {analyzing ? "RUNNING ML ANALYSIS..." : "RUN ML DEEP ANALYSIS"}
+                {analyzing ? "Analyzing..." : "Analyze"}
               </button>
+            </form>
 
+            {/* Display Current Address with Copy Button */}
+            {selected && (
+              <div
+                style={{
+                  fontFamily: "monospace",
+                  fontSize: 11,
+                  wordBreak: "break-all",
+                  color: "#f2f5f3",
+                  background: "rgba(0,0,0,.2)",
+                  padding: 8,
+                  borderRadius: 6,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 8,
+                  cursor: "pointer",
+                }}
+                onClick={() => handleCopy(selected.id)}
+              >
+                <span>{selected.id}</span>
+                <span
+                  style={{
+                    color: copied ? "var(--lime)" : "var(--muted)",
+                    fontSize: 10,
+                    fontWeight: 700,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {copied ? "COPIED" : "COPY"}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Run ML Analysis Button (Re-analyze current node) */}
+          {selected && (
+            <button
+              onClick={() => handleDeepAnalysis(selected.id)}
+              disabled={analyzing}
+              style={{
+                padding: "10px 14px",
+                borderRadius: 8,
+                background: analyzing ? "#20282b" : "var(--lime)",
+                color: analyzing ? "var(--muted)" : "#0a0e10",
+                border: "none",
+                fontWeight: 800,
+                fontSize: 12,
+                cursor: analyzing ? "not-allowed" : "pointer",
+                transition: "all 0.2s",
+                opacity: analyzing ? 0.7 : 1,
+              }}
+            >
+              {analyzing ? "RUNNING ML ANALYSIS..." : "RE-RUN ML DEEP ANALYSIS"}
+            </button>
+          )}
+
+          {selected ? (
+            <>
               {/* Risk Score Gauge */}
               <div>
                 <div
@@ -973,12 +983,11 @@ export default function GraphView({ caseId = null, refreshTrigger = null, toast 
                 color: "var(--dim)",
                 fontSize: 13,
                 textAlign: "center",
-                paddingTop: 80,
-                paddingBottom: 80,
+                paddingTop: 40,
+                paddingBottom: 40,
               }}
             >
-              ↖️ Click a wallet node
-              <br /> to inspect ML analysis
+              Enter an address above to run ML analysis and visualize the graph.
             </div>
           )}
         </div>
