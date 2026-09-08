@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 from neo4j import GraphDatabase
+from neo4j.exceptions import AuthError, ServiceUnavailable
 import os
 import uuid
 from datetime import datetime
@@ -39,16 +40,42 @@ class Neo4jConnection:
     def close(self):
         self.driver.close()
     
+    def verify_connectivity(self):
+        """Test the connection on startup"""
+        with self.driver.session() as session:
+            session.run("RETURN 1").consume()
+    
     def query(self, query, parameters=None):
         with self.driver.session() as session:
             return session.run(query, parameters or {}).data()
 
-# Initialize Neo4j connection
-neo4j_conn = Neo4jConnection(
-    uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-    user=os.getenv("NEO4J_USER", "neo4j"),
-    password=os.getenv("NEO4J_PASSWORD", "password")
-)
+# Initialize Neo4j connection safely
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+# Check both NEO4J_USER and NEO4J_USERNAME just in case
+NEO4J_USER = os.getenv("NEO4J_USER") or os.getenv("NEO4J_USERNAME", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
+
+try:
+    neo4j_conn = Neo4jConnection(uri=NEO4J_URI, user=NEO4J_USER, password=NEO4J_PASSWORD)
+    neo4j_conn.verify_connectivity()
+    logger.info("✅ Neo4j Database connected successfully!")
+except AuthError:
+    logger.error("❌ NEO4J AUTH FAILED: Check NEO4J_USER and NEO4J_PASSWORD in Render.")
+    logger.error(f"   Attempted User: '{NEO4J_USER}'")
+except ServiceUnavailable:
+    logger.error("❌ NEO4J UNAVAILABLE: Check NEO4J_URI or check if Aura is paused.")
+except Exception as e:
+    logger.error(f"❌ Neo4j Initialization Error: {e}")
+
+# Helper function to handle DB errors in routes
+def handle_db_error(e):
+    if isinstance(e, AuthError):
+        return jsonify({"error": "Database authentication failed. Check backend credentials."}), 503
+    elif isinstance(e, ServiceUnavailable):
+        return jsonify({"error": "Database is unavailable or paused."}), 503
+    else:
+        logger.error(f"Unexpected DB Error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 def fetch_ethereum_transactions(wallet_address):
     """Fetch real transactions from Etherscan API"""
@@ -143,7 +170,6 @@ def health():
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    """User login endpoint with email, password, and role"""
     try:
         data = request.json or {}
         email = data.get("email", "").lower().strip()
@@ -159,7 +185,6 @@ def login():
         if len(password) < 6:
             return jsonify({"error": "Invalid credentials"}), 401
         
-        # TODO: Validate against Neo4j User nodes in production
         return jsonify({
             "status": "success",
             "email": email,
@@ -173,7 +198,6 @@ def login():
 
 @app.route('/api/register', methods=['POST'])
 def register():
-    """User registration endpoint"""
     try:
         data = request.json or {}
         name = data.get("name", "").strip()
@@ -190,8 +214,6 @@ def register():
         if len(password) < 6:
             return jsonify({"error": "Password must be 6+ characters"}), 400
         
-        # TODO: Save to Neo4j User nodes in production
-        # For now, just return success
         return jsonify({
             "status": "success",
             "email": email,
@@ -218,7 +240,7 @@ def analyze_wallet():
         add_transactions_to_db(address, blockchain, transactions)
         return jsonify({"status": "success", "message": f"Analyzed {len(transactions)} transactions", "address": address, "blockchain": blockchain, "transaction_count": len(transactions)}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 @app.route('/api/wallet/get', methods=['GET'])
 def get_wallet():
@@ -230,7 +252,7 @@ def get_wallet():
         if not result: return jsonify({"error": "Wallet not found"}), 404
         return jsonify(result[0]), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 @app.route('/api/wallet/connections', methods=['GET'])
 def get_wallet_connections():
@@ -241,11 +263,10 @@ def get_wallet_connections():
         result = neo4j_conn.query(query, {"address": address})
         return jsonify({"from_address": address, "connected_wallets": result, "total_connections": len(result)}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 @app.route('/api/wallet/fraud-score', methods=['GET', 'POST'])
 def analyze_fraud_score():
-    """Analyze wallet for fraud - GET or POST"""
     try:
         if request.method == 'GET':
             address = request.args.get("address")
@@ -339,7 +360,7 @@ def get_all_wallets():
         wallets = neo4j_conn.query("MATCH (w:Wallet) RETURN w.address as addr, w.blockchain as chain, w.risk as risk, w.score as score, w.last_seen as lastActivity, w.transaction_count as txCount ORDER BY w.score DESC LIMIT 50")
         return jsonify({"wallets": [{"addr": w["addr"], "chain": w["chain"] or "Ethereum", "risk": w["risk"] or "medium", "score": w["score"] or 45, "lastActivity": w["lastActivity"] or "Recent", "txCount": w["txCount"] or 0} for w in wallets]}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 @app.route('/api/wallets', methods=['POST'])
 def add_global_wallet():
@@ -350,7 +371,7 @@ def add_global_wallet():
         res = neo4j_conn.query(query, {"address": addr, "blockchain": chain})
         return jsonify({"status": "success", "wallet": res[0]}), 201
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 # ===================== CASE MANAGEMENT ENDPOINTS =====================
 
@@ -360,7 +381,7 @@ def get_cases():
         query = "MATCH (c:Case) OPTIONAL MATCH (c)-[:TRACKS]->(w:Wallet) RETURN c.id as id, c.title as title, c.investigator as investigator, c.status as status, c.date_opened as date_opened, c.risk as risk, count(w) as wallets ORDER BY c.date_opened DESC"
         return jsonify({"cases": neo4j_conn.query(query)}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 @app.route('/api/cases', methods=['POST'])
 def create_case():
@@ -372,7 +393,7 @@ def create_case():
         neo4j_conn.query(query, params)
         return jsonify({"status": "success", "case": params}), 201
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 @app.route('/api/cases/<case_id>/patterns', methods=['GET'])
 def get_case_patterns(case_id):
@@ -384,7 +405,7 @@ def get_case_patterns(case_id):
             patterns = [{"badge": "PENDING", "title": "No Entities Tracked", "desc": "Add wallet addresses to activate AI detection."}]
         return jsonify({"patterns": patterns}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 @app.route('/api/cases/<case_id>/wallets', methods=['GET'])
 def get_case_wallets(case_id):
@@ -392,7 +413,7 @@ def get_case_wallets(case_id):
         wallets = neo4j_conn.query("MATCH (c:Case {id: $case_id})-[:TRACKS]->(w:Wallet) RETURN w.address as addr, w.blockchain as chain, w.risk as risk, w.score as score, w.last_seen as lastActivity, w.transaction_count as txCount ORDER BY w.score DESC", {"case_id": case_id})
         return jsonify({"wallets": [{"addr": w["addr"], "chain": w["chain"] or "Ethereum", "risk": w["risk"] or "medium", "score": w["score"] or 45, "lastActivity": w["lastActivity"] or "Recent", "txCount": w["txCount"] or 0} for w in wallets]}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 @app.route('/api/cases/<case_id>/wallets', methods=['POST'])
 def add_case_wallet(case_id):
@@ -403,7 +424,7 @@ def add_case_wallet(case_id):
         res = neo4j_conn.query(query, {"case_id": case_id, "address": addr, "blockchain": chain})
         return jsonify({"status": "success", "wallet": res[0]}), 201
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 # ===================== TRANSACTION EXPLORER ENDPOINTS =====================
 
@@ -437,7 +458,7 @@ def get_transactions():
         ]
         return jsonify({"transactions": transactions, "total": total, "limit": limit, "offset": offset}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 @app.route('/api/transactions/search', methods=['GET'])
 def search_transactions():
@@ -463,7 +484,7 @@ def search_transactions():
         ]
         return jsonify({"transactions": transactions, "total": len(transactions), "address": address}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 # ===================== BLOCKCHAIN GRAPH ENDPOINTS =====================
 
@@ -520,7 +541,7 @@ def get_graph():
         return jsonify({"nodes": positioned_nodes, "links": links}), 200
     except Exception as e:
         logger.error(f"Graph Error: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 # ===================== DASHBOARD ENDPOINTS =====================
 
@@ -546,7 +567,7 @@ def get_dashboard_stats():
             ]
         }), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 @app.route('/api/dashboard/alerts', methods=['GET'])
 def get_dashboard_alerts():
@@ -562,7 +583,7 @@ def get_dashboard_alerts():
         }
         return jsonify(alerts), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return handle_db_error(e)
 
 # ===================== ERROR HANDLERS =====================
 
